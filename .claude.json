@@ -1,0 +1,46 @@
+{
+  "installMethod": "unknown",
+  "autoUpdates": true,
+  "tipsHistory": {
+    "new-user-warmup": 0
+  },
+  "userID": "bcce82174945618a3a2752cacc5d2851fdf9cac60835eba1262e16245f47a8aa",
+  "projects": {
+    "/home/james/Dropbox/Code/gslides-api": {
+      "allowedTools": [],
+      "history": [
+        {
+          "display": "Add the following section to it: \"mcpServers\": {\n        \"mcp-omnisearch\": {\n            \"type\": \"stdio\",\n            \"command\": \"npx\",\n            \"args\": [\"-y\", \"mcp-omnisearch\"],\n            \"env\": {\n                \"TAVILY_API_KEY\": \"\",\n                \"BRAVE_API_KEY\": \"\",\n                \"KAGI_API_KEY\": \"\",\n                \"PERPLEXITY_API_KEY\": \"\",\n                \"JINA_AI_API_KEY\": \"\"\n            }\n        }\n    }",
+          "pastedContents": {}
+        },
+        {
+          "display": "what about lines 553 and follwing?",
+          "pastedContents": {}
+        },
+        {
+          "display": "How about now?",
+          "pastedContents": {}
+        }
+      ],
+      "mcpContextUris": [],
+      "mcpServers": {
+        "mcp-omnisearch": {
+            "type": "stdio",
+            "command": "npx",
+            "args": ["-y", "mcp-omnisearch"],
+            "env": {
+                "PERPLEXITY_API_KEY": "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",
+            }
+        }
+    },
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false,
+      "ignorePatterns": [],
+      "projectOnboardingSeenCount": 0,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "hasCompletedProjectOnboarding": true
+    }
+  }
+}

@@ -19,6 +19,9 @@ Feel free to add other functionality to prepare.py as needed (triggered by new .
 source ~/.claude/scripts/prepare.sh /path/to/your/.env/file
 ```
 
+4. [Install Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup), start up a new bash shell, 
+for example inside your IDE, and start claude there. 
+
 Then when you start a new shell, it will source the .env file and activate the conda environment 
 (if specified in the .env file), as well as add any extra directories to the PYTHONPATH, 
 so when you start claude code, it will have the correct paths and variables set up already.

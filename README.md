@@ -6,9 +6,11 @@ This repo's purpose is to make it easier to setup Claude Code on a new machine.
 2. Put into a .env file located somewhere else your relevant API keys, as well as the extra directories for the PYTHONPATH. 
 For example:
 ```bash
-export ANTHROPIC_API_KEY=your_key_here
-export OPENAI_API_KEY=your_key_here
-export PYTHONPATH_DIRS="/path/to/your/first/directory:/path/to/your/second/directory"
+ANTHROPIC_API_KEY=your_key_here
+OPENAI_API_KEY=your_key_here
+PYTHONPATH_DIRS="/path/to/your/first/directory:/path/to/your/second/directory"
+PERPLEXITY_API_KEY=your_key_here
+NOTION_API_KEY=your_key_here
 ```
 Feel free to add other functionality to prepare.py as needed (triggered by new .env variables, so it's backwards compatible)
 
@@ -24,7 +26,7 @@ so when you start claude code, it will have the correct paths and variables set 
 Contents:
 [Claude Code in Action.md](docs/Claude%20Code%20in%20Action.md) is a compilation of information from various sources to get you started with Claude Code.
 
-`.mcp.json` is a compilation of useful MCP servers, **you need to copy it to each project directory you work in for it to work**.
+`.mcp.json` is a compilation of useful MCP servers, **you need to copy it to each project directory for it to work there**.
 
 Supposedly ~/.claude.json is the place to configure global MCP settings, but Claude Code randomly overwrites it 
 on a whim, so **don't put anything important there**.

@@ -321,7 +321,7 @@ Unlike local development, there's no shortcut for permissions in GitHub Actions.
 
 ![[image.png]]
 ## MCP servers (mostly by example)
-Here is a [guide on troubleshooting](https://mcpcat.io/guides/adding-an-mcp-server-to-claude-code/)
+Here is a [guide on troubleshooting](https://mcpcat.io/guides/adding-an-mcp-server-to-claude-code/) (careful: its Notion MCP config for example is out of date)
 
 
 * You can use env variables in the jsons, like 

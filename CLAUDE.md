@@ -15,3 +15,6 @@ class Foo(BaseModel):
 ```
 
 ```
+- Never bulk add files to Git, always add specific named files only
+- To get additional information on APIs and how to use them, use perplexity and context7 MCP servers
+- NEVER do git add -A. ALWAYS only add specific named files

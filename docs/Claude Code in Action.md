@@ -48,6 +48,9 @@ This is a merge of information mostly from these courses:
 <https://learn.deeplearning.ai/courses/claude-code-a-highly-agentic-coding-assistant>
 <https://www.coursera.org/learn/claude-code>
 
+# Setup
+Setup Claude code as described [here](https://docs.anthropic.com/en/docs/claude-code/setup)
+
 # CLI commands and config
 
 ## Config files
@@ -131,7 +134,7 @@ When you mention a file this way, its contents are automatically included in eve
 ### Planning Mode
 
 For more complex tasks that require extensive research across your codebase, you can enable Planning Mode. This feature makes Claude do thorough exploration of your project before implementing changes.
-==Enable Planning Mode by pressing== **==Shift + Tab==** ==twice (or once if you're already auto-accepting edits).== In this mode, Claude will:
+==Enable Planning Mode by pressing== **==Shift + Tab==** ==twice (or once if you're already auto-accepting edits).== If that doesn't work for you on Windows, use Alt-M instead. In this mode, Claude will:
 
 * Read more files in your project
 * Create a detailed implementation plan
@@ -369,11 +372,11 @@ Note the double underscores in **mcp\_\_playwright**.
 
 ### Using Figma MCP server to create web app based on a mockup
 
-To init a new app: npx create-next-app@latest .
-In figma, Preferences >  enable dev mode mcp server
+To init a new app: npx create-next-app@latest . 
+In figma, Preferences >  "Enable local MCP server"
 https://learn.deeplearning.ai/courses/claude-code-a-highly-agentic-coding-assistant/lesson/vvq28/creating-web-app-based-on-a-figma-mockup
 Copy link to selection: ctrl-L
-claude mcp add --transport http figma-dev-mode-mcp-server http://127.0.0.1:3845/mcp
+claude mcp add --transport http figma-dev-mode-mcp-server http://127.0.0.1:3845/mcp or just use our .mcp.json
 also add playwright mcp like above
 ![[image.10.png]]
 

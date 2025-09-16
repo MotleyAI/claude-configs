@@ -46,6 +46,10 @@
       "env": {
         "NOTION_TOKEN": "${NOTION_API_KEY}"
       }
-    }
+    },
+	"figma-dev-mode-mcp-server": {
+          "type": "http",
+          "url": "http://127.0.0.1:3845/mcp"
+        }
   }
 }

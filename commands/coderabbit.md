@@ -7,7 +7,7 @@ Before running the command, check whether the codebase has any changes since the
 ALWAYS use the --config command and attach ALL CLAUDE.md files that you yourself would have used to write code in this repo (so global-level, repository-level, and any contained deeper down in the repo).
 
 Available options for the `coderabbit review` command:
-  Options:
+```
   -V, --version            output the version number
   --plain                  Output in plain text format (non-interactive)
   --prompt-only            Show only AI agent prompts (implies --plain)
@@ -18,6 +18,5 @@ Available options for the `coderabbit review` command:
   --cwd <path>             Working directory path
   --no-color               Disable colored output
   -h, --help               display help for command
-
-
+```
 ALWAYS SET THE bash TIMEOUT TO 15 MINUTES as this might take a while to run.

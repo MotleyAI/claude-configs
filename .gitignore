@@ -1,1 +1,8 @@
 /docs/.obsidian/
+.obsidian
+.credentials.json
+todos
+statsig
+shell-snapshots
+projects
+ide

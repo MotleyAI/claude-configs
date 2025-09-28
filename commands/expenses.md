@@ -1,0 +1,23 @@
+Use playwright to download receipts etc for me from various websites, using playwright mcp.
+Download them as PDF, using a telling name, with expense type and date in the name.
+If authentication is required, stop and ask me to authenticate, then continue. 
+Download the receipts to ~/Downloads/receipts, creating that directory if needed (check if it exists first)
+If there are .zip files, unzip them.
+Before declaring victory, CHECK that the file actually exists in the destination directory.
+
+Here's the info on the receipt to download: $ARGUMENTS
+
+Use the following source-specific instructions:
+# Slack
+https://motley-ai.slack.com/admin/billing/history
+
+# Anthropic
+The receipts can be either at 
+https://claude.ai/settings/billing 
+or at
+https://platform.claude.com/settings/billing
+In both cases, click View > Download receipt to download. 
+
+# OpenAI
+https://platform.openai.com/settings/organization/billing/history
+Click View > Download receipt to download. 

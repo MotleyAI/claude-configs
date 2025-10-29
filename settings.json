@@ -4,5 +4,5 @@
       "Read(./.env.*)"
     ]
   },
-  "model": "opusplan"
+  "alwaysThinkingEnabled": false
 }

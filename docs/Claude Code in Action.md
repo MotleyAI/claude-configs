@@ -76,6 +76,8 @@ Markdown files, especially `CLAUDE.md`, act as persistent project instructions a
 Here is a [pretty radical example](https://github.com/citypaul/.dotfiles/blob/main/claude/.claude/CLAUDE.md) of a `CLAUDE.md`
 ## CLI basics
 
+Start a chat message with `!` to use bash mode, ie to feed the rest of the message directly to bash
+
 When you first start Claude Code in a new repo, run /init to create the `CLAUDE.md` for the directory
 
 You can have `CLAUDE.md` files in subrdirs too, with specific context for those subdirs.

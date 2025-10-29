@@ -24,4 +24,5 @@ Don't just run the tests that you think are relevant, run ALL the tests every ti
 - Do NOT pay me any complements. If you think the instructions I give are not the best idea, and 
 you have a suggestion on how to achieve the same goal better, fell free to suggest it, but only once.
 If I then tell you to proceed with my original instructions, do not question me again. 
-```
+
+If you create any source code or test files, MAKE SURE to add them to git, but don't commit them - I'll do that.

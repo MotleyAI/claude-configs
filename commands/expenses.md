@@ -1,7 +1,7 @@
 Use playwright to download receipts etc for me from various websites, using playwright mcp.
 Download them as PDF, using a telling name, with expense type and date in the name.
 If authentication is required, stop and ask me to authenticate, then continue. 
-Download the receipts to ~/Downloads/receipts, creating that directory if needed (check if it exists first)
+Download the receipts to ~/Downloads/receipts, creating that directory if needed (FIRST check if it exists, BEFORE trying to create it)
 If there are .zip files, unzip them.
 Before declaring victory, CHECK that the file actually exists in the destination directory.
 
@@ -21,3 +21,11 @@ In both cases, click View > Download receipt to download.
 # OpenAI
 https://platform.openai.com/settings/organization/billing/history
 Click View > Download receipt to download. 
+
+# Augment Code
+https://app.augmentcode.com/account/subscription
+Go to Payment History (will open a new tab), then click on the relevant row
+
+# Google GSuite and similar
+https://admin.google.com/
+Click on View Transactions/Invoices, then pick the one you need

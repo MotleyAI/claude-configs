@@ -1,16 +1,13 @@
 {
   "mcpServers": {
-    "mcp-omnisearch": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-omnisearch"
-      ],
-      "env": {
-        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
-      }
-    },
+      "perplexity": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "perplexity-mcp"],
+    "env": {
+      "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
+    }
+  },
     "sequential-thinking": {
       "command": "npx",
       "args": [

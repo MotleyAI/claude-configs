@@ -4,5 +4,5 @@
       "Read(./.env.*)"
     ]
   },
-  "alwaysThinkingEnabled": false
+  "alwaysThinkingEnabled": true
 }

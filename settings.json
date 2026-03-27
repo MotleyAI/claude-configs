@@ -4,5 +4,16 @@
       "Read(./.env.*)"
     ]
   },
-  "model": "opusplan"
+  "enabledPlugins": {
+    "cowork-plugin-management@knowledge-work-plugins": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true,
+    "motley-local@My Uploads": false,
+    "motley@My Uploads": false,
+    "motley-staging@My Uploads": false,
+    "motley@agent-skills": false
+  },
+  "alwaysThinkingEnabled": true,
+  "autoUpdatesChannel": "stable"
 }

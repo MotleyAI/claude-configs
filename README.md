@@ -35,3 +35,6 @@ Supposedly ~/.claude.json is the place to configure global MCP settings, but Cla
 on a whim, so **don't put anything important there**.
 
 Also Claude writes conversation history to ~/.claude.json, so **don't put it in version control**.
+
+To run this against a locally running instance of motley, change the URL in `.mcp.json` to `https://localhost:5173/api/v1/mcp/` 
+

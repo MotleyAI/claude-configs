@@ -76,6 +76,8 @@ Markdown files, especially `CLAUDE.md`, act as persistent project instructions a
 Here is a [pretty radical example](https://github.com/citypaul/.dotfiles/blob/main/claude/.claude/CLAUDE.md) of a `CLAUDE.md`
 ## CLI basics
 
+Start a chat message with `!` to use bash mode, ie to feed the rest of the message directly to bash
+
 When you first start Claude Code in a new repo, run /init to create the `CLAUDE.md` for the directory
 
 You can have `CLAUDE.md` files in subrdirs too, with specific context for those subdirs.
@@ -437,6 +439,22 @@ This approach provides several advantages:
 * Transparent operation- Claude understands why the operation failed
 * Flexible matching- works with multiple tools (read, grep, etc.)
 * Clear feedback- provides meaningful error messages
+
+# Skills
+https://code.claude.com/docs/en/skills
+
+| Location   | Path                                                                         | Applies to                        |
+| ---------- | ---------------------------------------------------------------------------- | --------------------------------- |
+| Enterprise | See [managed settings](https://code.claude.com/docs/en/iam#managed-settings) | All users in your organization    |
+| Personal   | `~/.claude/skills/`                                                          | You, across all projects          |
+| Project    | `.claude/skills/`                                                            | Anyone working in this repository |
+| Plugin     | Bundled with [plugins](https://code.claude.com/docs/en/plugins)              | Anyone with the plugin installed  |
+If two Skills have the same name, the higher row wins: managed overrides personal, personal overrides project, and project overrides plugin. 
+
+When you work with files in subdirectories, Claude Code automatically discovers Skills from nested `.claude/skills/` directories. For example, if you’re editing a file in `packages/frontend/`, Claude Code also looks for Skills in `packages/frontend/.claude/skills/`. This supports monorepo setups where packages have their own Skills.
+
+Every Skill needs a `SKILL.md` file. The file starts with YAML metadata between `---` markers and must include a `name` and `description`, followed by Markdown instructions that Claude follows when the Skill is active; each skill lives in its own dir, like `~/.claude/skills/explaining-code/SKILL.md`
+
 
 # Claude SDK
 

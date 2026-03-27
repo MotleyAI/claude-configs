@@ -1,22 +1,17 @@
 {
   "mcpServers": {
-    "mcp-omnisearch": {
+      "perplexity": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "perplexity-mcp"],
+    "env": {
+      "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
+    }
+  },
+    "gslides": {
       "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-omnisearch"
-      ],
-      "env": {
-        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
-      }
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
+      "command": "python",
+      "args": ["-m", "gslides_api.mcp.server", "--default-format", "domain"]
     },
     "context7": {
       "command": "npx",
@@ -35,15 +30,6 @@
       "args": [
         "-y",
         "@notionhq/notion-mcp-server"
-      ],
-      "env": {
-        "NOTION_TOKEN": "${NOTION_API_KEY}"
-      }
-    },
-    "notion-markdown": {
-      "command": "npx",
-      "args": [
-        "gwanli-mcp"
       ],
       "env": {
         "NOTION_TOKEN": "${NOTION_API_KEY}"

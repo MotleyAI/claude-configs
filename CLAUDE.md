@@ -13,7 +13,7 @@ class Baz(BaseModel):
 class Foo(BaseModel):
     bars: List[Baz]
 ```
-
+ONLY apply this rule for output types for LLMs, eg in motleycrew, .with_structured_output, and similar, NOT to general Pydantic classes!
 
 - Never bulk add files to Git, always add specific named files only
 - NEVER do git add -A. ALWAYS only add specific named files, make sure to add EVERY new file you create (asking me each time)
@@ -33,4 +33,8 @@ If you create any source code or test files, MAKE SURE to add any newly created 
 - NEVER use dataclasses! If you think you need a dataclass, inherit from Pydantic's BaseModel instead
 - When I ask you a question, ANSWER THE QUESTION! Don't treat it like a rhetorical question that is really a command. 
 - Put all imports at the top of the file. If that is not possible (circular imports etc.), CONFIRM WITH ME FIRST before proceeding.
-- 
+
+NEVER ask me to find out things that you can find out yourself eg by running bash scripts - instead, run these scripts!
+Except for when sudo is required - in those cases, give the commands for me to run
+
+For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep. 

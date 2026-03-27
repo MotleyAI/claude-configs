@@ -28,4 +28,7 @@ Go to Payment History (will open a new tab), then click on the relevant row
 
 # Google GSuite and similar
 https://admin.google.com/
-Click on View Transactions/Invoices, then pick the one you need
+Click on View Transactions/Invoices, then pick the one you need.
+IMPORTANT: The payment date is the 1st of the month, but the invoice is for the PREVIOUS month's usage.
+For example, a charge on Mar 2 corresponds to the February billing period invoice.
+Always download the invoice from the period BEFORE the payment date month.

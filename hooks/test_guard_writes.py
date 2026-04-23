@@ -31,6 +31,7 @@ SAFE_UNSANDBOXED_PATTERNS = _module_globals["SAFE_UNSANDBOXED_PATTERNS"]
 split_on_and = _module_globals["split_on_and"]
 split_on_pipe = _module_globals["split_on_pipe"]
 strip_safe_pipes = _module_globals["strip_safe_pipes"]
+strip_quoted_strings = _module_globals["strip_quoted_strings"]
 evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
 
 
@@ -157,6 +158,29 @@ class TestUnsafeMeta:
 
     def test_stdout_to_dev_null(self):
         assert not self._has_meta("git status >/dev/null")
+
+
+# --- strip_quoted_strings ---
+
+class TestStripQuotedStrings:
+    def test_no_quotes(self):
+        assert strip_quoted_strings("git status") == "git status"
+
+    def test_single_quotes(self):
+        assert strip_quoted_strings("echo 'hello world'") == "echo ___"
+
+    def test_double_quotes(self):
+        assert strip_quoted_strings('echo "hello world"') == "echo ___"
+
+    def test_metacharacters_in_quotes(self):
+        result = strip_quoted_strings("gh api --jq '[.[] | select(.x > 1)]'")
+        assert "|" not in result
+        assert "(" not in result
+        assert ">" not in result
+
+    def test_nested_quotes(self):
+        result = strip_quoted_strings("""echo "it's fine" """)
+        assert "'" not in result
 
 
 # --- split_on_and ---
@@ -539,3 +563,10 @@ class TestHookIntegration:
         assert get_decision("Bash", {
             "command": "git status | head && git push"
         }) == "deny"
+
+    def test_gh_api_with_jq_unsandboxed_allows(self):
+        """gh api with --jq containing metacharacters in quotes should auto-approve."""
+        assert get_decision("Bash", {
+            "command": """gh api repos/MotleyAI/claude-configs/pulls/4/comments --jq '[.[] | select(.created_at > "2026-04-23T15:00:00Z") | {id, path, line, body: .body[:500]}]' 2>&1""",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"

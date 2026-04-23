@@ -98,6 +98,26 @@ def deny(reason):
     sys.exit(0)
 
 
+def strip_quoted_strings(cmd):
+    """Replace quoted strings with placeholder to avoid false metachar matches.
+    E.g. gh api --jq '[.[] | select(...)]' → gh api --jq ___"""
+    result = []
+    in_single = False
+    in_double = False
+    for c in cmd:
+        if c == "'" and not in_double:
+            in_single = not in_single
+            if not in_single:
+                result.append("___")
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            if not in_double:
+                result.append("___")
+        elif not in_single and not in_double:
+            result.append(c)
+    return ''.join(result)
+
+
 def normalize_cmd(raw):
     """Strip leading env var assignments and command/env prefixes,
     resolve absolute paths to basenames."""
@@ -251,13 +271,15 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
 if tool != "Bash":
     allow()
 
-# Strip safe redirections for metacharacter check
+# Strip safe redirections and quoted strings for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
+cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 
 # Check for truly unsafe metacharacters (not && or |, those are handled below).
 # Only block when unsandboxed — inside the sandbox, containment handles the risk,
 # and patterns like git commit -m "$(cat <<'EOF' ...)" are safe and common.
-if unsandboxed and UNSAFE_META.search(cmd_for_meta_check):
+# Use unquoted version so metacharacters inside quotes don't trigger false positives.
+if unsandboxed and UNSAFE_META.search(cmd_unquoted):
     ask(f"Compound command: {cmd[:120]}")
 
 # Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)

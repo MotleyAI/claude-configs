@@ -35,8 +35,12 @@ unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 # Safe I/O redirections to strip before checking for shell metacharacters
 SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
 
-# Shell metacharacters that indicate compound/piped commands
-SHELL_META = re.compile(r'[;&|`$(){}\n]|<<|>>')
+# Shell metacharacters that can't be safely decomposed
+# Note: && and | are handled separately with smarter logic
+UNSAFE_META = re.compile(r'[;`$(){}\n]|<<|>>')
+
+# Safe pipe targets — read-only consumers that can't cause side effects
+SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
 # Patterns for commands that are always dangerous
 ASK_ALWAYS_PATTERNS = [
@@ -105,37 +109,151 @@ def normalize_cmd(raw):
     return s
 
 
+def split_on_and(cmd):
+    """Split command on && outside of quotes. Returns list of parts,
+    or None if the command can't be safely split (unbalanced quotes)."""
+    parts = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+        elif c == '&' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '&':
+                parts.append(''.join(current).strip())
+                current = []
+                i += 2
+                continue
+            else:
+                # Single & (background) — not safe to decompose
+                return None
+        else:
+            current.append(c)
+        i += 1
+    if in_single or in_double:
+        return None  # Unbalanced quotes
+    parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+
+def split_on_pipe(cmd):
+    """Split command on | outside of quotes. Returns list of parts,
+    or None if the command can't be safely split."""
+    parts = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+        elif c == '|' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '|':
+                # || operator — not safe to decompose
+                return None
+            parts.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(c)
+        i += 1
+    if in_single or in_double:
+        return None
+    parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+
+def strip_safe_pipes(cmd):
+    """If a command ends with pipes to safe consumers (head, tail, grep, etc.),
+    strip those and return just the producer command. Returns None if any
+    pipe target is unsafe."""
+    pipe_parts = split_on_pipe(cmd)
+    if pipe_parts is None:
+        return None
+    if len(pipe_parts) == 1:
+        return cmd  # No pipes
+    # Check that all pipe targets (everything after first) are safe
+    for part in pipe_parts[1:]:
+        first_token = part.split()[0] if part.split() else ""
+        basename = os.path.basename(first_token)
+        if basename not in SAFE_PIPE_TARGETS:
+            return None  # Unsafe pipe target
+    return pipe_parts[0]
+
+
+def evaluate_single_cmd(cmd_str, unsandboxed):
+    """Evaluate a single (non-compound) command. Returns ("allow", None)
+    or ("ask", reason)."""
+    stripped = cmd_str.strip()
+    # Strip safe redirections
+    cleaned = SAFE_REDIRECTS.sub('', stripped)
+
+    # Try to strip safe pipes
+    producer = strip_safe_pipes(cleaned)
+    if producer is None:
+        # Has pipes to unsafe targets
+        return ("ask", f"Unsafe pipe: {stripped[:120]}")
+    cleaned = producer
+
+    normalized = normalize_cmd(cleaned)
+
+    # Check always-dangerous patterns
+    for pattern in ASK_ALWAYS_PATTERNS:
+        if re.match(pattern, normalized):
+            return ("ask", f"Dangerous operation: {stripped[:120]}")
+
+    # If bypassing sandbox, only allow known-safe commands
+    if unsandboxed:
+        for pattern in SAFE_UNSANDBOXED_PATTERNS:
+            if re.match(pattern, normalized):
+                return ("allow", None)
+        return ("ask", f"Sandbox bypass: {stripped[:120]}")
+
+    # gh commands inside sandbox: allow known reads, prompt for writes
+    if re.match(r"^gh\b", normalized):
+        for pattern in GH_READ_PATTERNS:
+            if re.match(pattern, normalized):
+                return ("allow", None)
+        return ("ask", f"gh write operation: {stripped[:120]}")
+
+    # Everything else is contained by the sandbox
+    return ("allow", None)
+
+
 # Only Bash commands need guarding — everything else is sandboxed
 if tool != "Bash":
     allow()
 
-# Compound commands can't be safely parsed — prompt
-# Strip safe I/O redirections (2>&1, >/dev/null) before checking
+# Strip safe redirections for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
-if SHELL_META.search(cmd_for_meta_check):
+
+# Check for truly unsafe metacharacters (not && or |, those are handled below)
+if UNSAFE_META.search(cmd_for_meta_check):
     ask(f"Compound command: {cmd[:120]}")
 
-# Normalize the command for pattern matching
-normalized = normalize_cmd(cmd)
+# Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)
+and_parts = split_on_and(cmd_for_meta_check)
+if and_parts is None:
+    # Couldn't safely split (unbalanced quotes, single &, etc.)
+    ask(f"Compound command: {cmd[:120]}")
+    and_parts = []  # unreachable, but satisfies type checker
 
-# Check if it matches an always-dangerous pattern
-for pattern in ASK_ALWAYS_PATTERNS:
-    if re.match(pattern, normalized):
-        ask(f"Dangerous operation: {cmd[:120]}")
+# Evaluate each part of the && chain (or just the single command)
+for part in and_parts:
+    decision, reason = evaluate_single_cmd(part, unsandboxed)
+    if decision == "ask":
+        ask(reason)
 
-# If bypassing sandbox, only allow known-safe commands through
-if unsandboxed:
-    for pattern in SAFE_UNSANDBOXED_PATTERNS:
-        if re.match(pattern, normalized):
-            allow()
-    ask(f"Sandbox bypass: {cmd[:120]}")
-
-# gh commands inside sandbox: allow known reads, prompt for writes
-if re.match(r"^gh\b", normalized):
-    for pattern in GH_READ_PATTERNS:
-        if re.match(pattern, normalized):
-            allow()
-    ask(f"gh write operation: {cmd[:120]}")
-
-# Everything else is contained by the sandbox
+# All parts approved
 allow()

@@ -9,7 +9,7 @@ import pytest
 
 HOOK_PATH = os.path.join(os.path.dirname(__file__), "guard_writes.py")
 
-# Import regex patterns and normalize_cmd for direct unit testing.
+# Import regex patterns and functions for direct unit testing.
 # The module runs as __main__ with stdin reading, so we extract only
 # the constant/function definitions by skipping the stdin-reading block.
 _module_globals = {"__builtins__": __builtins__}
@@ -23,11 +23,15 @@ _defs_source = _after_stdin.split("# Only Bash commands need guarding")[0]
 exec(compile(_imports + _defs_source, HOOK_PATH, "exec"), _module_globals)
 
 normalize_cmd = _module_globals["normalize_cmd"]
-SHELL_META = _module_globals["SHELL_META"]
+UNSAFE_META = _module_globals["UNSAFE_META"]
 SAFE_REDIRECTS = _module_globals["SAFE_REDIRECTS"]
 ASK_ALWAYS_PATTERNS = _module_globals["ASK_ALWAYS_PATTERNS"]
 GH_READ_PATTERNS = _module_globals["GH_READ_PATTERNS"]
 SAFE_UNSANDBOXED_PATTERNS = _module_globals["SAFE_UNSANDBOXED_PATTERNS"]
+split_on_and = _module_globals["split_on_and"]
+split_on_pipe = _module_globals["split_on_pipe"]
+strip_safe_pipes = _module_globals["strip_safe_pipes"]
+evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
 
 
 def run_hook(tool_name, tool_input):
@@ -105,25 +109,19 @@ class TestNormalizeCmd:
         assert normalize_cmd("  git status  ") == "git status"
 
 
-# --- SHELL_META detection ---
+# --- UNSAFE_META detection ---
 
-class TestShellMeta:
+class TestUnsafeMeta:
     def _has_meta(self, cmd):
-        """Check if cmd has shell metacharacters after stripping safe redirects."""
+        """Check if cmd has unsafe shell metacharacters after stripping safe redirects."""
         cleaned = SAFE_REDIRECTS.sub('', cmd)
-        return bool(SHELL_META.search(cleaned))
+        return bool(UNSAFE_META.search(cleaned))
 
     def test_simple_command_no_meta(self):
         assert not self._has_meta("git status")
 
     def test_semicolon(self):
         assert self._has_meta("echo hello; git push")
-
-    def test_and_operator(self):
-        assert self._has_meta("echo hello && git push")
-
-    def test_pipe(self):
-        assert self._has_meta("echo hello | grep hello")
 
     def test_backtick(self):
         assert self._has_meta("echo `whoami`")
@@ -143,6 +141,13 @@ class TestShellMeta:
     def test_heredoc(self):
         assert self._has_meta("cat <<EOF")
 
+    # && and | are NOT in UNSAFE_META (handled separately)
+    def test_and_not_unsafe_meta(self):
+        assert not self._has_meta("git status && git diff")
+
+    def test_pipe_not_unsafe_meta(self):
+        assert not self._has_meta("git log | head")
+
     # Safe redirections should NOT trigger
     def test_stderr_redirect_safe(self):
         assert not self._has_meta("gh api repos/foo/bar 2>&1")
@@ -153,9 +158,118 @@ class TestShellMeta:
     def test_stdout_to_dev_null(self):
         assert not self._has_meta("git status >/dev/null")
 
-    def test_redirect_with_real_meta(self):
-        # Has both safe redirect AND a real pipe — should detect
-        assert self._has_meta("git status 2>&1 | grep error")
+
+# --- split_on_and ---
+
+class TestSplitOnAnd:
+    def test_no_and(self):
+        assert split_on_and("git status") == ["git status"]
+
+    def test_simple_and(self):
+        assert split_on_and("git status && git diff") == ["git status", "git diff"]
+
+    def test_triple_and(self):
+        assert split_on_and("a && b && c") == ["a", "b", "c"]
+
+    def test_quoted_and(self):
+        """&& inside quotes should not split."""
+        assert split_on_and('echo "foo && bar"') == ['echo "foo && bar"']
+
+    def test_single_quoted_and(self):
+        assert split_on_and("echo 'foo && bar'") == ["echo 'foo && bar'"]
+
+    def test_background_ampersand(self):
+        """Single & should return None (can't safely split)."""
+        assert split_on_and("sleep 10 &") is None
+
+    def test_unbalanced_quotes(self):
+        assert split_on_and('echo "unbalanced') is None
+
+
+# --- split_on_pipe ---
+
+class TestSplitOnPipe:
+    def test_no_pipe(self):
+        assert split_on_pipe("git status") == ["git status"]
+
+    def test_simple_pipe(self):
+        assert split_on_pipe("git log | head") == ["git log", "head"]
+
+    def test_multi_pipe(self):
+        assert split_on_pipe("git log | sort | head") == ["git log", "sort", "head"]
+
+    def test_or_operator_returns_none(self):
+        """|| should return None (not a pipe, it's an operator we don't handle)."""
+        assert split_on_pipe("cmd1 || cmd2") is None
+
+    def test_quoted_pipe(self):
+        assert split_on_pipe('grep "foo|bar" file') == ['grep "foo|bar" file']
+
+
+# --- strip_safe_pipes ---
+
+class TestStripSafePipes:
+    def test_no_pipe(self):
+        assert strip_safe_pipes("git status") == "git status"
+
+    def test_safe_head(self):
+        assert strip_safe_pipes("git log | head") == "git log"
+
+    def test_safe_tail(self):
+        assert strip_safe_pipes("git log | tail -20") == "git log"
+
+    def test_safe_grep(self):
+        assert strip_safe_pipes("git log | grep fix") == "git log"
+
+    def test_safe_wc(self):
+        assert strip_safe_pipes("git status | wc -l") == "git status"
+
+    def test_safe_sort(self):
+        assert strip_safe_pipes("ls | sort") == "ls"
+
+    def test_chained_safe(self):
+        assert strip_safe_pipes("ls | sort | head") == "ls"
+
+    def test_unsafe_target(self):
+        assert strip_safe_pipes("ls | bash") is None
+
+    def test_unsafe_in_chain(self):
+        assert strip_safe_pipes("ls | bash | head") is None
+
+    def test_or_operator(self):
+        assert strip_safe_pipes("cmd1 || cmd2") is None
+
+
+# --- evaluate_single_cmd ---
+
+class TestEvaluateSingleCmd:
+    def test_safe_command(self):
+        assert evaluate_single_cmd("ls -la", False) == ("allow", None)
+
+    def test_dangerous_git_push(self):
+        decision, reason = evaluate_single_cmd("git push", False)
+        assert decision == "ask"
+
+    def test_gh_read_allows(self):
+        assert evaluate_single_cmd("gh pr view 4", False) == ("allow", None)
+
+    def test_gh_write_asks(self):
+        decision, reason = evaluate_single_cmd("gh pr create", False)
+        assert decision == "ask"
+
+    def test_safe_pipe_stripped(self):
+        assert evaluate_single_cmd("git log | head", False) == ("allow", None)
+
+    def test_unsafe_pipe_asks(self):
+        decision, reason = evaluate_single_cmd("ls | bash", False)
+        assert decision == "ask"
+
+    def test_unsandboxed_safe(self):
+        assert evaluate_single_cmd("gh pr view 4", True) == ("allow", None)
+
+    def test_unsandboxed_unknown_asks(self):
+        decision, reason = evaluate_single_cmd("whoami", True)
+        assert decision == "ask"
 
 
 # --- ASK_ALWAYS_PATTERNS ---
@@ -238,12 +352,14 @@ class TestGhReadPatterns:
 # --- Integration: full hook invocation ---
 
 class TestHookIntegration:
+    # Basic tool routing
     def test_non_bash_tool_allows(self):
         assert get_decision("Read", {"file_path": "/etc/passwd"}) == "allow"
 
     def test_non_bash_edit_allows(self):
         assert get_decision("Edit", {"file_path": "foo.py"}) == "allow"
 
+    # Simple commands
     def test_safe_bash_allows(self):
         assert get_decision("Bash", {"command": "ls -la"}) == "allow"
 
@@ -256,9 +372,7 @@ class TestHookIntegration:
     def test_docker_asks(self):
         assert get_decision("Bash", {"command": "docker run hello"}) == "ask"
 
-    def test_compound_command_asks(self):
-        assert get_decision("Bash", {"command": "echo hi && git push"}) == "ask"
-
+    # gh commands
     def test_gh_pr_view_allows(self):
         assert get_decision("Bash", {"command": "gh pr view 4"}) == "allow"
 
@@ -271,10 +385,11 @@ class TestHookIntegration:
     def test_gh_api_post_asks(self):
         assert get_decision("Bash", {"command": "gh api --method POST repos/foo/bar"}) == "ask"
 
+    # Safe redirections
     def test_stderr_redirect_not_compound(self):
-        """gh api ... 2>&1 should NOT be treated as compound command."""
         assert get_decision("Bash", {"command": "gh api repos/foo/bar 2>&1"}) == "allow"
 
+    # Sandbox bypass
     def test_unsandboxed_gh_read_allows(self):
         assert get_decision("Bash", {
             "command": "gh pr view 4",
@@ -294,19 +409,104 @@ class TestHookIntegration:
         }) == "ask"
 
     def test_unsandboxed_git_push_asks(self):
-        """git push should ask even when unsandboxed (dangerous pattern takes priority)."""
         assert get_decision("Bash", {
             "command": "git push",
             "dangerouslyDisableSandbox": True,
         }) == "ask"
 
+    # Normalization
     def test_normalized_env_prefix_git_push_asks(self):
         assert get_decision("Bash", {
             "command": "env GIT_SSH=x /usr/bin/git push",
         }) == "ask"
 
+    # Truly unsafe metacharacters
     def test_subshell_asks(self):
         assert get_decision("Bash", {"command": "(git push)"}) == "ask"
 
     def test_brace_group_asks(self):
         assert get_decision("Bash", {"command": "{ git push; }"}) == "ask"
+
+    def test_semicolon_asks(self):
+        assert get_decision("Bash", {"command": "echo hi; git push"}) == "ask"
+
+    def test_backtick_asks(self):
+        assert get_decision("Bash", {"command": "echo `whoami`"}) == "ask"
+
+    def test_dollar_expansion_asks(self):
+        assert get_decision("Bash", {"command": "echo $(whoami)"}) == "ask"
+
+    # --- && chain handling ---
+
+    def test_safe_and_chain_allows(self):
+        """Both parts are safe → allow."""
+        assert get_decision("Bash", {"command": "git status && git diff"}) == "allow"
+
+    def test_dangerous_and_chain_asks(self):
+        """One part is dangerous → ask."""
+        assert get_decision("Bash", {"command": "echo hi && git push"}) == "ask"
+
+    def test_triple_and_chain_allows(self):
+        assert get_decision("Bash", {"command": "ls && git status && git diff"}) == "allow"
+
+    def test_triple_and_chain_with_danger_asks(self):
+        assert get_decision("Bash", {"command": "ls && git status && git push"}) == "ask"
+
+    def test_quoted_and_not_split(self):
+        """&& inside quotes should not split — treat as single safe command."""
+        assert get_decision("Bash", {"command": 'echo "foo && bar"'}) == "allow"
+
+    def test_and_chain_with_gh_read_allows(self):
+        assert get_decision("Bash", {"command": "git status && gh pr view 4"}) == "allow"
+
+    def test_and_chain_with_gh_write_asks(self):
+        assert get_decision("Bash", {"command": "git status && gh pr create"}) == "ask"
+
+    # --- Safe pipe handling ---
+
+    def test_pipe_to_head_allows(self):
+        assert get_decision("Bash", {"command": "git log | head"}) == "allow"
+
+    def test_pipe_to_tail_allows(self):
+        assert get_decision("Bash", {"command": "git log | tail -20"}) == "allow"
+
+    def test_pipe_to_grep_allows(self):
+        assert get_decision("Bash", {"command": "git log | grep fix"}) == "allow"
+
+    def test_pipe_to_wc_allows(self):
+        assert get_decision("Bash", {"command": "git status | wc -l"}) == "allow"
+
+    def test_pipe_to_sort_allows(self):
+        assert get_decision("Bash", {"command": "ls | sort"}) == "allow"
+
+    def test_chained_safe_pipes_allows(self):
+        assert get_decision("Bash", {"command": "ls | sort | head"}) == "allow"
+
+    def test_pipe_to_unsafe_asks(self):
+        assert get_decision("Bash", {"command": "ls | bash"}) == "ask"
+
+    def test_pipe_dangerous_producer_asks(self):
+        """git push piped to head is still dangerous."""
+        assert get_decision("Bash", {"command": "git push | head"}) == "ask"
+
+    # --- Combined: && with pipes and redirects ---
+
+    def test_and_chain_with_pipe(self):
+        assert get_decision("Bash", {"command": "git status && git log | head"}) == "allow"
+
+    def test_redirect_with_safe_pipe(self):
+        assert get_decision("Bash", {
+            "command": "gh api repos/foo/bar 2>&1 | head -20"
+        }) == "allow"
+
+    def test_pytest_with_grep(self):
+        """Real-world command: pytest output piped to grep with redirect."""
+        assert get_decision("Bash", {
+            "command": 'poetry run pytest tests/test_sql.py -v --no-header --tb=short 2>&1 | grep -A 10 "FAILED"'
+        }) == "allow"
+
+    def test_and_chain_with_safe_pipe_and_danger(self):
+        """Safe pipe doesn't save a dangerous command in the chain."""
+        assert get_decision("Bash", {
+            "command": "git status | head && git push"
+        }) == "ask"

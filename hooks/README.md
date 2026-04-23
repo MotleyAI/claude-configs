@@ -10,7 +10,10 @@ Auto-approved. Sandbox contains filesystem access.
 
 | Command | Decision | Why |
 |---------|----------|-----|
-| Compound (`&&`, `\|`, `;`, `` ` ``, `$()`) | **ask** | Can't safely parse |
+| Unsafe metacharacters (`;`, `` ` ``, `$()`, `()`, `{}`) | **ask** | Can't safely parse |
+| `cmd1 && cmd2` | **evaluate each** | Each part checked independently; all must approve |
+| `cmd \| head/tail/grep/wc/sort` | **evaluate cmd** | Safe pipe targets stripped, producer evaluated |
+| `cmd \| unsafe_target` | **ask** | Unknown pipe target |
 | `git push`, `docker`, `gh` | **ask** | Would fail anyway (no keyring/socket access inside sandbox) |
 | Everything else | **allow** | Sandbox contains it |
 
@@ -18,7 +21,9 @@ Auto-approved. Sandbox contains filesystem access.
 
 | Command | Decision | Why |
 |---------|----------|-----|
-| Compound (`&&`, `\|`, `;`, etc.) | **ask** | Can't safely parse |
+| Unsafe metacharacters (`;`, `` ` ``, `$()`, etc.) | **ask** | Can't safely parse |
+| `cmd1 && cmd2` | **evaluate each** | Each part checked independently |
+| `cmd \| safe_filter` | **evaluate cmd** | Safe pipe targets: head, tail, grep, wc, sort |
 | `git push`, `git pull`, `docker *` | **ask** | Mutate remote/local state |
 | `git fetch` | **allow** | Read-only, just needs keyring |
 | `gh` reads (`pr/issue/run/repo list/view`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |

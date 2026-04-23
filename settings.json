@@ -1,19 +1,296 @@
 {
-  "permissions": {
-    "deny": [
-      "Read(./.env.*)"
-    ]
-  },
-  "enabledPlugins": {
-    "cowork-plugin-management@knowledge-work-plugins": true,
-    "pyright-lsp@claude-plugins-official": true,
-    "typescript-lsp@claude-plugins-official": true,
-    "code-simplifier@claude-plugins-official": true,
-    "motley-local@My Uploads": false,
-    "motley@My Uploads": false,
-    "motley-staging@My Uploads": false,
-    "motley@agent-skills": false
-  },
-  "alwaysThinkingEnabled": true,
-  "autoUpdatesChannel": "stable"
+	"permissions": {
+		"deny": [
+			"Read(./.env.*)"
+		],
+		"allow": [
+			"Bash(git status*)",
+			"Bash(git diff*)",
+			"Bash(git log*)",
+			"Bash(git show*)",
+			"Bash(git branch*)",
+			"Bash(git fetch*)",
+			"Bash(git stash list*)",
+			"Bash(gh pr list*)",
+			"Bash(gh pr view*)",
+			"Bash(gh issue list*)",
+			"Bash(gh issue view*)",
+			"Bash(gh run list*)",
+			"Bash(gh run view*)",
+			"Bash(gh repo view*)",
+			"Bash(gh api GET*)",
+			"Bash(cat *)",
+			"Bash(ls *)",
+			"Bash(find *)",
+			"Bash(grep *)",
+			"Bash(head *)",
+			"Bash(tail *)",
+			"Read(*)"
+		]
+	},
+	"enabledPlugins": {
+		"cowork-plugin-management@knowledge-work-plugins": true,
+		"pyright-lsp@claude-plugins-official":             true,
+		"typescript-lsp@claude-plugins-official":          true,
+		"code-simplifier@claude-plugins-official":         true,
+		"motley-local@My Uploads":                         false,
+		"motley@My Uploads":                               false,
+		"motley-staging@My Uploads":                       false,
+		"motley@agent-skills":                             false
+	},
+	"alwaysThinkingEnabled": true,
+	"autoUpdatesChannel":    "stable",
+	"hooks": {
+		"ConfigChange": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"CwdChanged": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"Elicitation": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"ElicitationResult": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"InstructionsLoaded": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"Notification": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PermissionDenied": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PermissionRequest": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PostCompact": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PostToolUse": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PostToolUseFailure": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PreCompact": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"PreToolUse": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			},
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "python3 ~/.claude/hooks/guard_writes.py"
+					}
+				]
+			}
+		],
+		"SessionEnd": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"SessionStart": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"Stop": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"StopFailure": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"SubagentStart": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"SubagentStop": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"TaskCompleted": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"TeammateIdle": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		],
+		"UserPromptSubmit": [
+			{
+				"hooks": [
+					{
+						"command": "\"/home/james/.local/share/GitKrakenCLI/versions/gk_3_1_59/gk_3_1_59\" ai hook run --host claude-code",
+						"type":    "command"
+					}
+				],
+				"matcher": ""
+			}
+		]
+	}
 }

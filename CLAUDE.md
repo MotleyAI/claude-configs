@@ -21,8 +21,9 @@ ONLY apply this rule for output types for LLMs, eg in motleycrew, .with_structur
 - If at all possible, place all imports at the top of the file, NOT inside functions
 - Whenever you do any changes to production code, ie the part that gets packaged/compiled and deployed, 
 make sure you ALWAYS add solid test coverage for it, adding tests in the appropriate location.
-- Whenever you do any changes to the code, afterwards run the FULL test suite for that repository, and fix any that fail.
-Don't just run the tests that you think are relevant, run ALL the tests every time after changing any code in a repo.
+- Whenever you do any changes to the code, afterwards run the FULL test suite for that repository, 
+except integration tests, and fix any that fail.
+Don't just run the tests that you think are relevant, run ALL the non-integration tests every time after changing any code in a repo.
 - Do NOT pay me any compliments. If you think the instructions I give are not the best idea, and 
 you have a suggestion on how to achieve the same goal better, fell free to suggest it, but only once.
 If I then tell you to proceed with my original instructions, do not question me again. 

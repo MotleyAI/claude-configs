@@ -1,16 +1,30 @@
 #!/usr/bin/env python3
 # ~/.claude/hooks/guard_writes.py
+#
+# With sandboxing enabled, most operations are safely contained.
+# This hook only guards the three excluded-from-sandbox commands
+# that can affect shared/remote state:
+#   - git push (mutates remote)
+#   - gh writes (mutates GitHub)
+#   - docker (always prompt)
 import sys, json, re
 
 data = json.loads(sys.stdin.read())
 tool = data.get("tool_name", "")
-cmd = data.get("tool_input", {}).get("command", "")
+cmd = data.get("tool_input", {}).get("command", "").strip()
 
-READ_ONLY_BASH = [
-    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(status|diff|log|show|branch|fetch|stash)\b",
+# Patterns for commands that escape the sandbox and need approval
+ASK_PATTERNS = [
+    # git push (with any flags/args) — the only git command that mutates remote
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
+    # docker — always ask
+    r"^docker\b",
+]
+
+# Read-only gh patterns — these are safe
+GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
-    r"^gh api GET ",
-    r"^(cat|ls|find|grep|head|tail|wc|stat) ",
+    r"^gh\s+api\s+GET\b",
 ]
 
 
@@ -35,17 +49,21 @@ def ask(reason):
     sys.exit(0)
 
 
-# Auto-approve Read tool entirely
-if tool == "Read":
+# Only Bash commands need guarding — everything else is sandboxed
+if tool != "Bash":
     allow()
 
-# Auto-approve known read-only bash commands
-if tool == "Bash":
-    for pattern in READ_ONLY_BASH:
-        if re.match(pattern, cmd.strip()):
-            allow()
-    # Anything else: ask for approval
-    ask(f"Write/unknown operation: {cmd[:120]}")
+# Check if it matches a dangerous pattern
+for pattern in ASK_PATTERNS:
+    if re.match(pattern, cmd):
+        ask(f"Excluded-from-sandbox operation: {cmd[:120]}")
 
-# All other tools (Write, Edit, etc.): ask
-ask(f"Non-read tool: {tool}")
+# gh commands: allow known reads, prompt for everything else
+if re.match(r"^gh\b", cmd):
+    for pattern in GH_READ_PATTERNS:
+        if re.match(pattern, cmd):
+            allow()
+    ask(f"gh write operation: {cmd[:120]}")
+
+# Everything else is contained by the sandbox
+allow()

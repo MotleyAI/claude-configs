@@ -3,30 +3,6 @@
 		"deny": [
 			"Read(./.env)",
 			"Read(./.env.*)"
-		],
-		"allow": [
-			"Bash(git status*)",
-			"Bash(git diff*)",
-			"Bash(git log*)",
-			"Bash(git show*)",
-			"Bash(git branch*)",
-			"Bash(git fetch*)",
-			"Bash(git stash list*)",
-			"Bash(gh pr list*)",
-			"Bash(gh pr view*)",
-			"Bash(gh issue list*)",
-			"Bash(gh issue view*)",
-			"Bash(gh run list*)",
-			"Bash(gh run view*)",
-			"Bash(gh repo view*)",
-			"Bash(gh api GET*)",
-			"Bash(cat *)",
-			"Bash(ls *)",
-			"Bash(find *)",
-			"Bash(grep *)",
-			"Bash(head *)",
-			"Bash(tail *)",
-			"Read(*)"
 		]
 	},
 	"enabledPlugins": {

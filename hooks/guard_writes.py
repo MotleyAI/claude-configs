@@ -39,8 +39,8 @@ GH_READ_PATTERNS = [
 # Commands that legitimately need unsandboxed access but are safe
 SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
-    # git fetch/pull need keyring for auth but don't mutate remote
-    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(fetch|pull)\b",
+    # git fetch needs keyring for auth but doesn't mutate local or remote
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
 ]
 
 

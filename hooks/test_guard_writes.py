@@ -159,6 +159,13 @@ class TestUnsafeMeta:
     def test_stdout_to_dev_null(self):
         assert not self._has_meta("git status >/dev/null")
 
+    # Redirections to files SHOULD trigger
+    def test_redirect_to_file(self):
+        assert self._has_meta("git status > /tmp/out")
+
+    def test_input_redirect(self):
+        assert self._has_meta("cmd < /etc/passwd")
+
 
 # --- strip_quoted_strings ---
 
@@ -364,8 +371,32 @@ class TestGhReadPatterns:
     def test_api_post_blocked(self):
         assert not self._matches_read("gh api --method POST repos/foo/bar")
 
+    def test_api_post_equals_blocked(self):
+        assert not self._matches_read("gh api --method=POST repos/foo/bar")
+
+    def test_api_x_post_no_space_blocked(self):
+        assert not self._matches_read("gh api -XPOST repos/foo/bar")
+
+    def test_api_x_patch_no_space_blocked(self):
+        assert not self._matches_read("gh api -XPATCH repos/foo/bar")
+
     def test_api_with_field_blocked(self):
         assert not self._matches_read("gh api repos/foo/bar -f title=test")
+
+    def test_api_with_field_equals_blocked(self):
+        assert not self._matches_read("gh api repos/foo/bar --field=title=test")
+
+    def test_api_with_F_no_space_blocked(self):
+        assert not self._matches_read("gh api repos/foo/bar -Ftitle=test")
+
+    def test_api_with_f_no_space_blocked(self):
+        assert not self._matches_read("gh api repos/foo/bar -ftitle=test")
+
+    def test_api_with_raw_field_equals_blocked(self):
+        assert not self._matches_read("gh api repos/foo/bar --raw-field=data=x")
+
+    def test_api_with_input_equals_blocked(self):
+        assert not self._matches_read("gh api repos/foo/bar --input=file.json")
 
     def test_auth_status(self):
         assert self._matches_read("gh auth status")
@@ -570,3 +601,35 @@ class TestHookIntegration:
             "command": """gh api repos/MotleyAI/claude-configs/pulls/4/comments --jq '[.[] | select(.created_at > "2026-04-23T15:00:00Z") | {id, path, line, body: .body[:500]}]' 2>&1""",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
+
+    # --- Redirection to files (unsandboxed) ---
+
+    def test_redirect_to_file_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 > /tmp/out",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_redirect_to_file_sandboxed_allows(self):
+        """Inside sandbox, redirects are contained."""
+        assert get_decision("Bash", {"command": "git status > /tmp/out"}) == "allow"
+
+    # --- gh api hardened flag forms ---
+
+    def test_gh_api_method_equals_post_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh api --method=POST repos/foo/bar",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_gh_api_xpost_no_space_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh api -XPOST repos/foo/bar",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_gh_api_f_no_space_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh api repos/foo/bar -ftitle=test",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"

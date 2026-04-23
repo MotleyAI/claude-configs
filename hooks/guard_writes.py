@@ -37,7 +37,7 @@ SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
 
 # Shell metacharacters that can't be safely decomposed
 # Note: && and | are handled separately with smarter logic
-UNSAFE_META = re.compile(r'[;`$(){}\n]|<<|>>')
+UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
 
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
@@ -54,7 +54,8 @@ ASK_ALWAYS_PATTERNS = [
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
     # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
-    r"^gh\s+api\b(?!.*\s+(-X|--method)\s+(POST|PUT|PATCH|DELETE))(?!.*\s+(-f|--field|-F|--raw-field|--input)\b)",
+    # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms
+    r"^gh\s+api\b(?!.*(\s+(-X|--method)\s+|-X|--method=)(POST|PUT|PATCH|DELETE))(?!.*(\s+(-f|--field|-F|--raw-field|--input)\b|-[fF]\S|--field=|--raw-field=|--input=))",
     r"^gh\s+auth\s+status\b",
 ]
 

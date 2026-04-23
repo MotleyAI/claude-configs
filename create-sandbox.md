@@ -1,4 +1,12 @@
-# Fix bwrap sandbox on Ubuntu 24.04+
+# Setting up Claude Code sandbox on Ubuntu 24.04+
+
+## 1. Install dependencies
+
+```bash
+sudo apt install bubblewrap socat
+```
+
+## 2. Fix AppArmor permissions
 
 Ubuntu restricts unprivileged user namespaces via AppArmor, which breaks
 bubblewrap's network isolation. Grant bwrap permission to create user namespaces:

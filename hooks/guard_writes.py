@@ -7,8 +7,8 @@ tool = data.get("tool_name", "")
 cmd = data.get("tool_input", {}).get("command", "")
 
 READ_ONLY_BASH = [
-    r"^git (status|diff|log|show|branch|fetch|stash list)",
-    r"^gh (pr|issue|run|repo) (list|view)",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(status|diff|log|show|branch|fetch|stash)\b",
+    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
     r"^gh api GET ",
     r"^(cat|ls|find|grep|head|tail|wc|stat) ",
 ]

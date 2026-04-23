@@ -39,3 +39,6 @@ NEVER ask me to find out things that you can find out yourself eg by running bas
 Except for when sudo is required - in those cases, give the commands for me to run
 
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
+
+- `gh`, `git fetch`, and `git push` commands need `dangerouslyDisableSandbox: true` because they require
+keyring access outside the sandbox. Always use this flag when running these commands.

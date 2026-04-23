@@ -9,16 +9,34 @@
 #
 # 2. Dangerous commands: git push, gh writes, docker — always prompt
 #    regardless of sandbox state.
-import sys, json, re, os
+import sys
+import json
+import re
+import os
 
-data = json.loads(sys.stdin.read())
+try:
+    data = json.loads(sys.stdin.read())
+except (json.JSONDecodeError, ValueError):
+    # Fail closed: if we can't parse input, require approval
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": "Failed to parse hook input",
+        }
+    }))
+    sys.exit(0)
+
 tool = data.get("tool_name", "")
 tool_input = data.get("tool_input", {})
 cmd = tool_input.get("command", "").strip()
 unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 
+# Safe I/O redirections to strip before checking for shell metacharacters
+SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
+
 # Shell metacharacters that indicate compound/piped commands
-SHELL_META = re.compile(r'[;&|`$]|<<|>>')
+SHELL_META = re.compile(r'[;&|`$(){}\n]|<<|>>')
 
 # Patterns for commands that are always dangerous
 ASK_ALWAYS_PATTERNS = [
@@ -92,7 +110,9 @@ if tool != "Bash":
     allow()
 
 # Compound commands can't be safely parsed — prompt
-if SHELL_META.search(cmd):
+# Strip safe I/O redirections (2>&1, >/dev/null) before checking
+cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
+if SHELL_META.search(cmd_for_meta_check):
     ask(f"Compound command: {cmd[:120]}")
 
 # Normalize the command for pattern matching

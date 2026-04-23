@@ -8,24 +8,29 @@ Auto-approved. Sandbox contains filesystem access.
 
 ## Bash inside sandbox
 
-| Command | Decision | Why |
-|---------|----------|-----|
-| Any command (including `$()`, `` ` ``, subshells, etc.) | **allow** | Sandbox contains everything |
+Everything auto-approves — the sandbox contains it. Includes compound commands (`$()`, backticks, subshells, heredocs, `&&` chains, safe pipes).
 
-Exception: `git push`, `docker`, `gh` writes would fail inside sandbox anyway (no keyring/socket), but are still caught if they appear as plain commands or inside `&&` chains.
+Exceptions (would fail inside sandbox anyway due to no keyring/socket):
+- `git push`, `docker` → **deny** with "use dangerouslyDisableSandbox: true"
+- `gh` write commands → **deny** with "use dangerouslyDisableSandbox: true"
+- Unsafe pipe targets (`cmd | bash`) → **ask**
 
 ## Bash outside sandbox (`dangerouslyDisableSandbox: true`)
 
 | Command | Decision | Why |
 |---------|----------|-----|
-| Unsafe metacharacters (`;`, `` ` ``, `$()`, etc.) | **ask** | Can't safely parse |
+| Unsafe metacharacters (`;`, `` ` ``, `$()`, `()`, `{}`) | **ask** | Can't safely parse |
 | `cmd1 && cmd2` | **evaluate each** | Each part checked independently |
 | `cmd \| safe_filter` | **evaluate cmd** | Safe pipe targets: head, tail, grep, wc, sort |
-| `git push`, `git pull`, `docker *` | **ask** | Mutate remote/local state |
+| `git push`, `docker` | **ask** | Dangerous — mutate remote/state |
 | `git fetch` | **allow** | Read-only, just needs keyring |
 | `gh` reads (`pr/issue/run/repo list/view`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
 | All other `gh` commands | **ask** | Unknown = assume write |
 | Everything else | **ask** | No reason to bypass sandbox |
+
+## Safe I/O redirections
+
+`2>&1`, `>/dev/null`, `2>/dev/null` are stripped before metacharacter/pipe analysis and don't trigger compound command detection.
 
 ## Command normalization
 

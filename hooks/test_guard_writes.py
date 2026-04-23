@@ -246,16 +246,20 @@ class TestEvaluateSingleCmd:
     def test_safe_command(self):
         assert evaluate_single_cmd("ls -la", False) == ("allow", None)
 
-    def test_dangerous_git_push(self):
+    def test_dangerous_git_push_sandboxed_denies(self):
         decision, reason = evaluate_single_cmd("git push", False)
+        assert decision == "deny"
+
+    def test_dangerous_git_push_unsandboxed_asks(self):
+        decision, reason = evaluate_single_cmd("git push", True)
         assert decision == "ask"
 
     def test_gh_read_allows(self):
         assert evaluate_single_cmd("gh pr view 4", False) == ("allow", None)
 
-    def test_gh_write_asks(self):
+    def test_gh_write_sandboxed_denies(self):
         decision, reason = evaluate_single_cmd("gh pr create", False)
-        assert decision == "ask"
+        assert decision == "deny"
 
     def test_safe_pipe_stripped(self):
         assert evaluate_single_cmd("git log | head", False) == ("allow", None)
@@ -366,24 +370,24 @@ class TestHookIntegration:
     def test_git_status_allows(self):
         assert get_decision("Bash", {"command": "git status"}) == "allow"
 
-    def test_git_push_asks(self):
-        assert get_decision("Bash", {"command": "git push"}) == "ask"
+    def test_git_push_denies_sandboxed(self):
+        assert get_decision("Bash", {"command": "git push"}) == "deny"
 
-    def test_docker_asks(self):
-        assert get_decision("Bash", {"command": "docker run hello"}) == "ask"
+    def test_docker_denies_sandboxed(self):
+        assert get_decision("Bash", {"command": "docker run hello"}) == "deny"
 
     # gh commands
     def test_gh_pr_view_allows(self):
         assert get_decision("Bash", {"command": "gh pr view 4"}) == "allow"
 
-    def test_gh_pr_create_asks(self):
-        assert get_decision("Bash", {"command": "gh pr create"}) == "ask"
+    def test_gh_pr_create_denies_sandboxed(self):
+        assert get_decision("Bash", {"command": "gh pr create"}) == "deny"
 
     def test_gh_api_read_allows(self):
         assert get_decision("Bash", {"command": "gh api repos/foo/bar"}) == "allow"
 
-    def test_gh_api_post_asks(self):
-        assert get_decision("Bash", {"command": "gh api --method POST repos/foo/bar"}) == "ask"
+    def test_gh_api_post_denies_sandboxed(self):
+        assert get_decision("Bash", {"command": "gh api --method POST repos/foo/bar"}) == "deny"
 
     # Safe redirections
     def test_stderr_redirect_not_compound(self):
@@ -415,10 +419,10 @@ class TestHookIntegration:
         }) == "ask"
 
     # Normalization
-    def test_normalized_env_prefix_git_push_asks(self):
+    def test_normalized_env_prefix_git_push_denies_sandboxed(self):
         assert get_decision("Bash", {
             "command": "env GIT_SSH=x /usr/bin/git push",
-        }) == "ask"
+        }) == "deny"
 
     # Unsafe metacharacters — sandboxed: sandbox contains them, allow
     def test_subshell_sandboxed_allows(self):
@@ -467,15 +471,15 @@ class TestHookIntegration:
         """Both parts are safe → allow."""
         assert get_decision("Bash", {"command": "git status && git diff"}) == "allow"
 
-    def test_dangerous_and_chain_asks(self):
-        """One part is dangerous → ask."""
-        assert get_decision("Bash", {"command": "echo hi && git push"}) == "ask"
+    def test_dangerous_and_chain_denies_sandboxed(self):
+        """One part is dangerous → deny (needs unsandboxed)."""
+        assert get_decision("Bash", {"command": "echo hi && git push"}) == "deny"
 
     def test_triple_and_chain_allows(self):
         assert get_decision("Bash", {"command": "ls && git status && git diff"}) == "allow"
 
     def test_triple_and_chain_with_danger_asks(self):
-        assert get_decision("Bash", {"command": "ls && git status && git push"}) == "ask"
+        assert get_decision("Bash", {"command": "ls && git status && git push"}) == "deny"
 
     def test_quoted_and_not_split(self):
         """&& inside quotes should not split — treat as single safe command."""
@@ -484,8 +488,8 @@ class TestHookIntegration:
     def test_and_chain_with_gh_read_allows(self):
         assert get_decision("Bash", {"command": "git status && gh pr view 4"}) == "allow"
 
-    def test_and_chain_with_gh_write_asks(self):
-        assert get_decision("Bash", {"command": "git status && gh pr create"}) == "ask"
+    def test_and_chain_with_gh_write_denies_sandboxed(self):
+        assert get_decision("Bash", {"command": "git status && gh pr create"}) == "deny"
 
     # --- Safe pipe handling ---
 
@@ -510,9 +514,9 @@ class TestHookIntegration:
     def test_pipe_to_unsafe_asks(self):
         assert get_decision("Bash", {"command": "ls | bash"}) == "ask"
 
-    def test_pipe_dangerous_producer_asks(self):
-        """git push piped to head is still dangerous."""
-        assert get_decision("Bash", {"command": "git push | head"}) == "ask"
+    def test_pipe_dangerous_producer_denies_sandboxed(self):
+        """git push piped to head — needs unsandboxed."""
+        assert get_decision("Bash", {"command": "git push | head"}) == "deny"
 
     # --- Combined: && with pipes and redirects ---
 
@@ -534,4 +538,4 @@ class TestHookIntegration:
         """Safe pipe doesn't save a dangerous command in the chain."""
         assert get_decision("Bash", {
             "command": "git status | head && git push"
-        }) == "ask"
+        }) == "deny"

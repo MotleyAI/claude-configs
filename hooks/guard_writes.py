@@ -87,6 +87,17 @@ def ask(reason):
     sys.exit(0)
 
 
+def deny(reason):
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+    sys.exit(0)
+
+
 def normalize_cmd(raw):
     """Strip leading env var assignments and command/env prefixes,
     resolve absolute paths to basenames."""
@@ -192,9 +203,12 @@ def strip_safe_pipes(cmd):
     return pipe_parts[0]
 
 
+NEEDS_UNSANDBOXED = "This command needs unsandboxed access. Use dangerouslyDisableSandbox: true"
+
+
 def evaluate_single_cmd(cmd_str, unsandboxed):
-    """Evaluate a single (non-compound) command. Returns ("allow", None)
-    or ("ask", reason)."""
+    """Evaluate a single (non-compound) command. Returns
+    ("allow", None), ("ask", reason), or ("deny", reason)."""
     stripped = cmd_str.strip()
     # Strip safe redirections
     cleaned = SAFE_REDIRECTS.sub('', stripped)
@@ -208,10 +222,12 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
 
     normalized = normalize_cmd(cleaned)
 
-    # Check always-dangerous patterns
+    # Check always-dangerous patterns (git push, docker)
     for pattern in ASK_ALWAYS_PATTERNS:
         if re.match(pattern, normalized):
-            return ("ask", f"Dangerous operation: {stripped[:120]}")
+            if unsandboxed:
+                return ("ask", f"Dangerous operation: {stripped[:120]}")
+            return ("deny", NEEDS_UNSANDBOXED)
 
     # If bypassing sandbox, only allow known-safe commands
     if unsandboxed:
@@ -220,12 +236,12 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
                 return ("allow", None)
         return ("ask", f"Sandbox bypass: {stripped[:120]}")
 
-    # gh commands inside sandbox: allow known reads, prompt for writes
+    # gh commands inside sandbox: allow known reads, deny writes (need keyring)
     if re.match(r"^gh\b", normalized):
         for pattern in GH_READ_PATTERNS:
             if re.match(pattern, normalized):
                 return ("allow", None)
-        return ("ask", f"gh write operation: {stripped[:120]}")
+        return ("deny", NEEDS_UNSANDBOXED)
 
     # Everything else is contained by the sandbox
     return ("allow", None)
@@ -255,6 +271,8 @@ if and_parts is None:
 # Evaluate each part of the && chain (or just the single command)
 for part in and_parts:
     decision, reason = evaluate_single_cmd(part, unsandboxed)
+    if decision == "deny":
+        deny(reason)
     if decision == "ask":
         ask(reason)
 

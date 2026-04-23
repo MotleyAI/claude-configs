@@ -38,4 +38,7 @@ If you create any source code or test files, MAKE SURE to add any newly created 
 NEVER ask me to find out things that you can find out yourself eg by running bash scripts - instead, run these scripts!
 Except for when sudo is required - in those cases, give the commands for me to run
 
-For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep. 
+For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
+
+- `gh`, `git fetch`, and `git push` commands need `dangerouslyDisableSandbox: true` because they require
+keyring access outside the sandbox. Always use this flag when running these commands.

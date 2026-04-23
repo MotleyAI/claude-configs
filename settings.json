@@ -42,7 +42,6 @@
 	"autoUpdatesChannel":    "stable",
 	"sandbox": {
 		"enabled": true,
-		"excludedCommands": ["git", "gh", "docker *"],
 		"filesystem": {
 			"allowWrite": ["."],
 			"denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"]

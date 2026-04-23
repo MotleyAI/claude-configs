@@ -1,30 +1,42 @@
 #!/usr/bin/env python3
 # ~/.claude/hooks/guard_writes.py
 #
-# With sandboxing enabled, most operations are safely contained.
-# This hook only guards the three excluded-from-sandbox commands
-# that can affect shared/remote state:
-#   - git push (mutates remote)
-#   - gh writes (mutates GitHub)
-#   - docker (always prompt)
+# Guards dangerous operations in two layers:
+#
+# 1. Sandbox bypass: any command with dangerouslyDisableSandbox=true
+#    is prompted UNLESS it's a known-safe command that legitimately
+#    needs unsandboxed access (gh reads, git fetch/pull).
+#
+# 2. Dangerous commands: git push, gh writes, docker — always prompt
+#    regardless of sandbox state.
 import sys, json, re
 
 data = json.loads(sys.stdin.read())
 tool = data.get("tool_name", "")
-cmd = data.get("tool_input", {}).get("command", "").strip()
+tool_input = data.get("tool_input", {})
+cmd = tool_input.get("command", "").strip()
+unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 
-# Patterns for commands that escape the sandbox and need approval
-ASK_PATTERNS = [
-    # git push (with any flags/args) — the only git command that mutates remote
+# Patterns for commands that are always dangerous
+ASK_ALWAYS_PATTERNS = [
+    # git push (with any flags/args) — mutates remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
     # docker — always ask
     r"^docker\b",
 ]
 
-# Read-only gh patterns — these are safe
+# Read-only gh patterns — safe even unsandboxed
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
     r"^gh\s+api\s+GET\b",
+    r"^gh\s+auth\s+status\b",
+]
+
+# Commands that legitimately need unsandboxed access but are safe
+SAFE_UNSANDBOXED_PATTERNS = [
+    *GH_READ_PATTERNS,
+    # git fetch/pull need keyring for auth but don't mutate remote
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(fetch|pull)\b",
 ]
 
 
@@ -53,12 +65,19 @@ def ask(reason):
 if tool != "Bash":
     allow()
 
-# Check if it matches a dangerous pattern
-for pattern in ASK_PATTERNS:
+# Check if it matches an always-dangerous pattern
+for pattern in ASK_ALWAYS_PATTERNS:
     if re.match(pattern, cmd):
-        ask(f"Excluded-from-sandbox operation: {cmd[:120]}")
+        ask(f"Dangerous operation: {cmd[:120]}")
 
-# gh commands: allow known reads, prompt for everything else
+# If bypassing sandbox, only allow known-safe commands through
+if unsandboxed:
+    for pattern in SAFE_UNSANDBOXED_PATTERNS:
+        if re.match(pattern, cmd):
+            allow()
+    ask(f"Sandbox bypass: {cmd[:120]}")
+
+# gh commands inside sandbox: allow known reads, prompt for writes
 if re.match(r"^gh\b", cmd):
     for pattern in GH_READ_PATTERNS:
         if re.match(pattern, cmd):

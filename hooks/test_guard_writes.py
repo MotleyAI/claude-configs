@@ -420,21 +420,46 @@ class TestHookIntegration:
             "command": "env GIT_SSH=x /usr/bin/git push",
         }) == "ask"
 
-    # Truly unsafe metacharacters
-    def test_subshell_asks(self):
-        assert get_decision("Bash", {"command": "(git push)"}) == "ask"
+    # Unsafe metacharacters — sandboxed: sandbox contains them, allow
+    def test_subshell_sandboxed_allows(self):
+        assert get_decision("Bash", {"command": "(echo hello)"}) == "allow"
 
-    def test_brace_group_asks(self):
-        assert get_decision("Bash", {"command": "{ git push; }"}) == "ask"
+    def test_backtick_sandboxed_allows(self):
+        assert get_decision("Bash", {"command": "echo `whoami`"}) == "allow"
 
-    def test_semicolon_asks(self):
-        assert get_decision("Bash", {"command": "echo hi; git push"}) == "ask"
+    def test_dollar_expansion_sandboxed_allows(self):
+        assert get_decision("Bash", {"command": "echo $(whoami)"}) == "allow"
 
-    def test_backtick_asks(self):
-        assert get_decision("Bash", {"command": "echo `whoami`"}) == "ask"
+    def test_git_commit_heredoc_sandboxed_allows(self):
+        """Real-world: git commit with heredoc message."""
+        assert get_decision("Bash", {
+            "command": "git commit -m \"$(cat <<'EOF'\nmessage\nEOF\n)\""
+        }) == "allow"
 
-    def test_dollar_expansion_asks(self):
-        assert get_decision("Bash", {"command": "echo $(whoami)"}) == "ask"
+    # Unsafe metacharacters — unsandboxed: must ask
+    def test_subshell_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "(git push)",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_semicolon_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "echo hi; git push",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_backtick_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "echo `whoami`",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_dollar_expansion_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "echo $(whoami)",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
 
     # --- && chain handling ---
 

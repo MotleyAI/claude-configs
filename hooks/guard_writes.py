@@ -238,16 +238,19 @@ if tool != "Bash":
 # Strip safe redirections for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
 
-# Check for truly unsafe metacharacters (not && or |, those are handled below)
-if UNSAFE_META.search(cmd_for_meta_check):
+# Check for truly unsafe metacharacters (not && or |, those are handled below).
+# Only block when unsandboxed — inside the sandbox, containment handles the risk,
+# and patterns like git commit -m "$(cat <<'EOF' ...)" are safe and common.
+if unsandboxed and UNSAFE_META.search(cmd_for_meta_check):
     ask(f"Compound command: {cmd[:120]}")
 
 # Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)
 and_parts = split_on_and(cmd_for_meta_check)
 if and_parts is None:
-    # Couldn't safely split (unbalanced quotes, single &, etc.)
-    ask(f"Compound command: {cmd[:120]}")
-    and_parts = []  # unreachable, but satisfies type checker
+    if unsandboxed:
+        ask(f"Compound command: {cmd[:120]}")
+    # Inside sandbox with unparseable command — sandbox contains it, allow
+    and_parts = [cmd_for_meta_check]
 
 # Evaluate each part of the && chain (or just the single command)
 for part in and_parts:

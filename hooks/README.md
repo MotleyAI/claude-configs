@@ -10,12 +10,9 @@ Auto-approved. Sandbox contains filesystem access.
 
 | Command | Decision | Why |
 |---------|----------|-----|
-| Unsafe metacharacters (`;`, `` ` ``, `$()`, `()`, `{}`) | **ask** | Can't safely parse |
-| `cmd1 && cmd2` | **evaluate each** | Each part checked independently; all must approve |
-| `cmd \| head/tail/grep/wc/sort` | **evaluate cmd** | Safe pipe targets stripped, producer evaluated |
-| `cmd \| unsafe_target` | **ask** | Unknown pipe target |
-| `git push`, `docker`, `gh` | **ask** | Would fail anyway (no keyring/socket access inside sandbox) |
-| Everything else | **allow** | Sandbox contains it |
+| Any command (including `$()`, `` ` ``, subshells, etc.) | **allow** | Sandbox contains everything |
+
+Exception: `git push`, `docker`, `gh` writes would fail inside sandbox anyway (no keyring/socket), but are still caught if they appear as plain commands or inside `&&` chains.
 
 ## Bash outside sandbox (`dangerouslyDisableSandbox: true`)
 

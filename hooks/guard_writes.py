@@ -35,8 +35,12 @@ unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 # Safe I/O redirections to strip before checking for shell metacharacters
 SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
 
-# Shell metacharacters that indicate compound/piped commands
-SHELL_META = re.compile(r'[;&|`$(){}\n]|<<|>>')
+# Shell metacharacters that can't be safely decomposed
+# Note: && and | are handled separately with smarter logic
+UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
+
+# Safe pipe targets — read-only consumers that can't cause side effects
+SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
 # Patterns for commands that are always dangerous
 ASK_ALWAYS_PATTERNS = [
@@ -50,7 +54,8 @@ ASK_ALWAYS_PATTERNS = [
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
     # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
-    r"^gh\s+api\b(?!.*\s+(-X|--method)\s+(POST|PUT|PATCH|DELETE))(?!.*\s+(-f|--field|-F|--raw-field|--input)\b)",
+    # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms
+    r"^gh\s+api\b(?!.*(\s+(-X|--method)\s+|-X|--method=)(POST|PUT|PATCH|DELETE))(?!.*(\s+(-f|--field|-F|--raw-field|--input)\b|-[fF]\S|--field=|--raw-field=|--input=))",
     r"^gh\s+auth\s+status\b",
 ]
 
@@ -83,6 +88,37 @@ def ask(reason):
     sys.exit(0)
 
 
+def deny(reason):
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+    sys.exit(0)
+
+
+def strip_quoted_strings(cmd):
+    """Replace quoted strings with placeholder to avoid false metachar matches.
+    E.g. gh api --jq '[.[] | select(...)]' → gh api --jq ___"""
+    result = []
+    in_single = False
+    in_double = False
+    for c in cmd:
+        if c == "'" and not in_double:
+            in_single = not in_single
+            if not in_single:
+                result.append("___")
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            if not in_double:
+                result.append("___")
+        elif not in_single and not in_double:
+            result.append(c)
+    return ''.join(result)
+
+
 def normalize_cmd(raw):
     """Strip leading env var assignments and command/env prefixes,
     resolve absolute paths to basenames."""
@@ -105,37 +141,163 @@ def normalize_cmd(raw):
     return s
 
 
+def split_on_and(cmd):
+    """Split command on && outside of quotes. Returns list of parts,
+    or None if the command can't be safely split (unbalanced quotes)."""
+    parts = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+        elif c == '&' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '&':
+                parts.append(''.join(current).strip())
+                current = []
+                i += 2
+                continue
+            else:
+                # Single & (background) — not safe to decompose
+                return None
+        else:
+            current.append(c)
+        i += 1
+    if in_single or in_double:
+        return None  # Unbalanced quotes
+    parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+
+def split_on_pipe(cmd):
+    """Split command on | outside of quotes. Returns list of parts,
+    or None if the command can't be safely split."""
+    parts = []
+    current = []
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "'" and not in_double:
+            in_single = not in_single
+            current.append(c)
+        elif c == '"' and not in_single:
+            in_double = not in_double
+            current.append(c)
+        elif c == '|' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '|':
+                # || operator — not safe to decompose
+                return None
+            parts.append(''.join(current).strip())
+            current = []
+        else:
+            current.append(c)
+        i += 1
+    if in_single or in_double:
+        return None
+    parts.append(''.join(current).strip())
+    return [p for p in parts if p]
+
+
+def strip_safe_pipes(cmd):
+    """If a command ends with pipes to safe consumers (head, tail, grep, etc.),
+    strip those and return just the producer command. Returns None if any
+    pipe target is unsafe."""
+    pipe_parts = split_on_pipe(cmd)
+    if pipe_parts is None:
+        return None
+    if len(pipe_parts) == 1:
+        return cmd  # No pipes
+    # Check that all pipe targets (everything after first) are safe
+    for part in pipe_parts[1:]:
+        first_token = part.split()[0] if part.split() else ""
+        basename = os.path.basename(first_token)
+        if basename not in SAFE_PIPE_TARGETS:
+            return None  # Unsafe pipe target
+    return pipe_parts[0]
+
+
+NEEDS_UNSANDBOXED = "This command needs unsandboxed access. Use dangerouslyDisableSandbox: true"
+
+
+def evaluate_single_cmd(cmd_str, unsandboxed):
+    """Evaluate a single (non-compound) command. Returns
+    ("allow", None), ("ask", reason), or ("deny", reason)."""
+    stripped = cmd_str.strip()
+    # Strip safe redirections
+    cleaned = SAFE_REDIRECTS.sub('', stripped)
+
+    # Try to strip safe pipes
+    producer = strip_safe_pipes(cleaned)
+    if producer is None:
+        # Has pipes to unsafe targets
+        return ("ask", f"Unsafe pipe: {stripped[:120]}")
+    cleaned = producer
+
+    normalized = normalize_cmd(cleaned)
+
+    # Check always-dangerous patterns (git push, docker)
+    for pattern in ASK_ALWAYS_PATTERNS:
+        if re.match(pattern, normalized):
+            if unsandboxed:
+                return ("ask", f"Dangerous operation: {stripped[:120]}")
+            return ("deny", NEEDS_UNSANDBOXED)
+
+    # If bypassing sandbox, only allow known-safe commands
+    if unsandboxed:
+        for pattern in SAFE_UNSANDBOXED_PATTERNS:
+            if re.match(pattern, normalized):
+                return ("allow", None)
+        return ("ask", f"Sandbox bypass: {stripped[:120]}")
+
+    # gh commands inside sandbox: allow known reads, deny writes (need keyring)
+    if re.match(r"^gh\b", normalized):
+        for pattern in GH_READ_PATTERNS:
+            if re.match(pattern, normalized):
+                return ("allow", None)
+        return ("deny", NEEDS_UNSANDBOXED)
+
+    # Everything else is contained by the sandbox
+    return ("allow", None)
+
+
 # Only Bash commands need guarding — everything else is sandboxed
 if tool != "Bash":
     allow()
 
-# Compound commands can't be safely parsed — prompt
-# Strip safe I/O redirections (2>&1, >/dev/null) before checking
+# Strip safe redirections and quoted strings for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
-if SHELL_META.search(cmd_for_meta_check):
+cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
+
+# Check for truly unsafe metacharacters (not && or |, those are handled below).
+# Only block when unsandboxed — inside the sandbox, containment handles the risk,
+# and patterns like git commit -m "$(cat <<'EOF' ...)" are safe and common.
+# Use unquoted version so metacharacters inside quotes don't trigger false positives.
+if unsandboxed and UNSAFE_META.search(cmd_unquoted):
     ask(f"Compound command: {cmd[:120]}")
 
-# Normalize the command for pattern matching
-normalized = normalize_cmd(cmd)
+# Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)
+and_parts = split_on_and(cmd_for_meta_check)
+if and_parts is None:
+    if unsandboxed:
+        ask(f"Compound command: {cmd[:120]}")
+    # Inside sandbox with unparseable command — sandbox contains it, allow
+    and_parts = [cmd_for_meta_check]
 
-# Check if it matches an always-dangerous pattern
-for pattern in ASK_ALWAYS_PATTERNS:
-    if re.match(pattern, normalized):
-        ask(f"Dangerous operation: {cmd[:120]}")
+# Evaluate each part of the && chain (or just the single command)
+for part in and_parts:
+    decision, reason = evaluate_single_cmd(part, unsandboxed)
+    if decision == "deny":
+        deny(reason)
+    if decision == "ask":
+        ask(reason)
 
-# If bypassing sandbox, only allow known-safe commands through
-if unsandboxed:
-    for pattern in SAFE_UNSANDBOXED_PATTERNS:
-        if re.match(pattern, normalized):
-            allow()
-    ask(f"Sandbox bypass: {cmd[:120]}")
-
-# gh commands inside sandbox: allow known reads, prompt for writes
-if re.match(r"^gh\b", normalized):
-    for pattern in GH_READ_PATTERNS:
-        if re.match(pattern, normalized):
-            allow()
-    ask(f"gh write operation: {cmd[:120]}")
-
-# Everything else is contained by the sandbox
+# All parts approved
 allow()

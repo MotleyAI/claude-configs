@@ -16,7 +16,7 @@ _module_globals = {"__builtins__": __builtins__}
 with open(HOOK_PATH) as f:
     source = f.read()
 # Extract: imports + everything after the try/except block up to the main logic
-_imports = "import sys\nimport json\nimport re\nimport os\n"
+_imports = "import sys\nimport json\nimport re\nimport os\nimport shlex\n"
 _after_stdin = source.split("unsandboxed = tool_input.get", 1)[1]
 _after_stdin = "unsandboxed = False\n" + _after_stdin.split("\n", 1)[1]
 _defs_source = _after_stdin.split("# Only Bash commands need guarding")[0]
@@ -270,6 +270,54 @@ class TestStripSafePipes:
     def test_or_operator(self):
         assert strip_safe_pipes("cmd1 || cmd2") is None
 
+    # tee with safe destinations
+    def test_tee_tmp_path_allowed(self):
+        assert strip_safe_pipes("cmd | tee /tmp/x") == "cmd"
+
+    def test_tee_append_flag_allowed(self):
+        assert strip_safe_pipes("cmd | tee -a /tmp/x") == "cmd"
+
+    def test_tee_long_append_flag_allowed(self):
+        assert strip_safe_pipes("cmd | tee --append /tmp/x") == "cmd"
+
+    def test_tee_multiple_safe_dests_allowed(self):
+        assert strip_safe_pipes("cmd | tee /tmp/a /tmp/b") == "cmd"
+
+    def test_tee_chained_with_tail_allowed(self):
+        assert strip_safe_pipes("cmd | tee /tmp/x | tail") == "cmd"
+
+    def test_tee_tmpdir_var_allowed(self):
+        assert strip_safe_pipes("cmd | tee $TMPDIR/x") == "cmd"
+
+    def test_tee_no_args_allowed(self):
+        # `tee` with no destinations is just a stdout passthrough
+        assert strip_safe_pipes("cmd | tee") == "cmd"
+
+    # tee with unsafe destinations
+    def test_tee_home_rejected(self):
+        assert strip_safe_pipes("cmd | tee ~/.bashrc") is None
+
+    def test_tee_home_var_rejected(self):
+        assert strip_safe_pipes("cmd | tee $HOME/foo") is None
+
+    def test_tee_etc_rejected(self):
+        assert strip_safe_pipes("cmd | tee /etc/passwd") is None
+
+    def test_tee_path_traversal_rejected(self):
+        assert strip_safe_pipes("cmd | tee /tmp/../etc/passwd") is None
+
+    def test_tee_command_substitution_rejected(self):
+        assert strip_safe_pipes("cmd | tee /tmp/$(whoami)") is None
+
+    def test_tee_backtick_substitution_rejected(self):
+        assert strip_safe_pipes("cmd | tee /tmp/`whoami`") is None
+
+    def test_tee_unknown_flag_rejected(self):
+        assert strip_safe_pipes("cmd | tee -D /tmp/x") is None
+
+    def test_tee_mixed_safe_unsafe_rejected(self):
+        assert strip_safe_pipes("cmd | tee /tmp/a /etc/passwd") is None
+
 
 # --- evaluate_single_cmd ---
 
@@ -295,8 +343,18 @@ class TestEvaluateSingleCmd:
     def test_safe_pipe_stripped(self):
         assert evaluate_single_cmd("git log | head", False) == ("allow", None)
 
-    def test_unsafe_pipe_asks(self):
-        decision, reason = evaluate_single_cmd("ls | bash", False)
+    def test_unsafe_pipe_unsandboxed_asks(self):
+        decision, reason = evaluate_single_cmd("ls | bash", True)
+        assert decision == "ask"
+
+    def test_unsafe_pipe_sandboxed_allows(self):
+        assert evaluate_single_cmd("ls | bash", False) == ("allow", None)
+
+    def test_logical_or_sandboxed_allows(self):
+        assert evaluate_single_cmd("foo || bar", False) == ("allow", None)
+
+    def test_logical_or_unsandboxed_asks(self):
+        decision, reason = evaluate_single_cmd("foo || bar", True)
         assert decision == "ask"
 
     def test_unsandboxed_safe(self):
@@ -566,8 +624,11 @@ class TestHookIntegration:
     def test_chained_safe_pipes_allows(self):
         assert get_decision("Bash", {"command": "ls | sort | head"}) == "allow"
 
-    def test_pipe_to_unsafe_asks(self):
-        assert get_decision("Bash", {"command": "ls | bash"}) == "ask"
+    def test_pipe_to_unsafe_sandboxed_allows(self):
+        assert get_decision("Bash", {"command": "ls | bash"}) == "allow"
+
+    def test_pipe_to_unsafe_unsandboxed_asks(self):
+        assert get_decision("Bash", {"command": "ls | bash", "dangerouslyDisableSandbox": True}) == "ask"
 
     def test_pipe_dangerous_producer_denies_sandboxed(self):
         """git push piped to head — needs unsandboxed."""
@@ -633,3 +694,36 @@ class TestHookIntegration:
             "command": "gh api repos/foo/bar -ftitle=test",
             "dangerouslyDisableSandbox": True,
         }) == "ask"
+
+    # tee in pipe — uses an allowlisted producer (`gh pr view`) so we
+    # exercise the pipe-target logic, not the producer-allowlist logic.
+    def test_tee_tmp_log_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 | tee /tmp/install.log | tail -80",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_tee_tmp_no_consumer_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 | tee /tmp/x",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_tee_home_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 | tee ~/.bashrc",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_tee_etc_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 | tee /etc/something",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_tee_home_sandboxed_allows(self):
+        # Inside sandbox, unsafe pipe targets are allowed because the
+        # sandbox itself contains the write.
+        assert get_decision("Bash", {
+            "command": "echo hi | tee ~/.bashrc",
+        }) == "allow"

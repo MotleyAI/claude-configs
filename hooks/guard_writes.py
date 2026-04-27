@@ -13,6 +13,7 @@ import sys
 import json
 import re
 import os
+import shlex
 
 try:
     data = json.loads(sys.stdin.read())
@@ -41,6 +42,10 @@ UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
 
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
+
+# tee is allowed as a pipe target when its destinations are all under /tmp/
+# or $TMPDIR — see is_safe_pipe_target.
+SAFE_TEE_FLAGS = {"-a", "--append", "-i", "--ignore-interrupts", "--"}
 
 # Patterns for commands that are always dangerous
 ASK_ALWAYS_PATTERNS = [
@@ -206,21 +211,55 @@ def split_on_pipe(cmd):
     return [p for p in parts if p]
 
 
+def is_safe_tee_path(p):
+    """A tee destination is safe if it's an unambiguous path under /tmp/
+    or $TMPDIR — no path traversal, no command substitution, no ~/$HOME."""
+    if ".." in p or "`" in p or "~" in p:
+        return False
+    if p.startswith("/tmp/") and "$" not in p:
+        return True
+    if p == "$TMPDIR" or p.startswith("$TMPDIR/"):
+        return p.count("$") == 1
+    return False
+
+
+def is_safe_pipe_target(part):
+    """A pipe segment is a safe target if it's a pure read-only consumer
+    (head/tail/grep/wc/sort), or a tee invocation whose destinations are
+    all safe paths."""
+    try:
+        argv = shlex.split(part)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    name = os.path.basename(argv[0])
+    if name in SAFE_PIPE_TARGETS:
+        return True
+    if name == "tee":
+        for tok in argv[1:]:
+            if tok.startswith("-"):
+                if tok not in SAFE_TEE_FLAGS:
+                    return False
+            else:
+                if not is_safe_tee_path(tok):
+                    return False
+        return True
+    return False
+
+
 def strip_safe_pipes(cmd):
-    """If a command ends with pipes to safe consumers (head, tail, grep, etc.),
-    strip those and return just the producer command. Returns None if any
-    pipe target is unsafe."""
+    """If a command ends with pipes to safe consumers (head, tail, grep,
+    tee /tmp/..., etc.), strip those and return just the producer command.
+    Returns None if any pipe target is unsafe."""
     pipe_parts = split_on_pipe(cmd)
     if pipe_parts is None:
         return None
     if len(pipe_parts) == 1:
         return cmd  # No pipes
-    # Check that all pipe targets (everything after first) are safe
     for part in pipe_parts[1:]:
-        first_token = part.split()[0] if part.split() else ""
-        basename = os.path.basename(first_token)
-        if basename not in SAFE_PIPE_TARGETS:
-            return None  # Unsafe pipe target
+        if not is_safe_pipe_target(part):
+            return None
     return pipe_parts[0]
 
 
@@ -237,8 +276,10 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     # Try to strip safe pipes
     producer = strip_safe_pipes(cleaned)
     if producer is None:
-        # Has pipes to unsafe targets
-        return ("ask", f"Unsafe pipe: {stripped[:120]}")
+        if unsandboxed:
+            return ("ask", f"Unsafe pipe: {stripped[:120]}")
+        # Inside sandbox — containment covers the risk, allow.
+        return ("allow", None)
     cleaned = producer
 
     normalized = normalize_cmd(cleaned)

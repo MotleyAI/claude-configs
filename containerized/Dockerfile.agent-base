@@ -1,0 +1,31 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qy && apt-get install -qy \
+    git curl ca-certificates build-essential \
+    python3.12 python3.12-dev libpython3.12 \
+    nodejs npm \
+    gh \
+    unzip \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_PYTHON=python3.12 \
+    UV_CACHE_DIR=/uv-cache
+
+RUN npm install -g @anthropic-ai/claude-code @openai/codex
+
+RUN curl -fsSL https://opencode.ai/install | bash \
+  && (cp /root/.opencode/bin/opencode /usr/local/bin/opencode 2>/dev/null \
+      || cp "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode 2>/dev/null \
+      || true) \
+  && command -v opencode
+
+RUN mkdir -p /root/.claude/hooks /root/.claude/agents
+
+WORKDIR /workspace

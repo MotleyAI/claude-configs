@@ -8,7 +8,9 @@ systemctl --user disable claude-cowork-service 2>/dev/null || true
 echo "Removing Claude Desktop / Cowork state (but keeping Claude Code state)..."
 # This line is needed if you worked around the self-referential symlink bug of Claude Cowork
 # by making the relevant files immutable.
-sudo chattr -R -i ~/.config/Claude/local-agent-mode-sessions/
+if [ -d ~/.config/Claude/local-agent-mode-sessions/ ]; then
+  sudo chattr -R -i ~/.config/Claude/local-agent-mode-sessions/ 2>/dev/null || true
+fi
 
 rm -rf ~/.config/Claude
 rm -rf ~/.local/share/claude

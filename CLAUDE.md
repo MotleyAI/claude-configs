@@ -40,5 +40,4 @@ Except for when sudo is required - in those cases, give the commands for me to r
 
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
-- `gh`, `git fetch`, and `git push` commands need `dangerouslyDisableSandbox: true` because they require
-keyring access outside the sandbox. Always use this flag when running these commands.
+- Sandbox bypass rules (when to set `dangerouslyDisableSandbox: true` and when not to): see `~/.claude/sandbox-bypass-rules.md`.

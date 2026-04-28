@@ -33,6 +33,7 @@ split_on_pipe = _module_globals["split_on_pipe"]
 strip_safe_pipes = _module_globals["strip_safe_pipes"]
 strip_quoted_strings = _module_globals["strip_quoted_strings"]
 evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
+strip_safe_tmp_redirects = _module_globals["strip_safe_tmp_redirects"]
 
 
 def run_hook(tool_name, tool_input):
@@ -317,6 +318,43 @@ class TestStripSafePipes:
 
     def test_tee_mixed_safe_unsafe_rejected(self):
         assert strip_safe_pipes("cmd | tee /tmp/a /etc/passwd") is None
+
+
+# --- strip_safe_tmp_redirects ---
+
+class TestStripSafeTmpRedirects:
+    def test_no_redirect(self):
+        assert strip_safe_tmp_redirects("git status") == "git status"
+
+    def test_redirect_to_tmp(self):
+        assert strip_safe_tmp_redirects("cmd > /tmp/foo") == "cmd"
+
+    def test_append_to_tmp(self):
+        assert strip_safe_tmp_redirects("cmd >> /tmp/foo") == "cmd"
+
+    def test_stderr_to_tmp(self):
+        assert strip_safe_tmp_redirects("cmd 2> /tmp/foo") == "cmd"
+
+    def test_both_to_tmp(self):
+        assert strip_safe_tmp_redirects("cmd &> /tmp/foo") == "cmd"
+
+    def test_redirect_to_tmpdir(self):
+        assert strip_safe_tmp_redirects("cmd > $TMPDIR/foo") == "cmd"
+
+    def test_redirect_to_etc_kept(self):
+        assert strip_safe_tmp_redirects("cmd > /etc/foo") == "cmd > /etc/foo"
+
+    def test_redirect_path_traversal_kept(self):
+        s = "cmd > /tmp/../etc/foo"
+        assert strip_safe_tmp_redirects(s) == s
+
+    def test_redirect_command_substitution_kept(self):
+        s = "cmd > /tmp/$(whoami)"
+        assert strip_safe_tmp_redirects(s) == s
+
+    def test_redirect_home_var_kept(self):
+        s = "cmd > $HOME/foo"
+        assert strip_safe_tmp_redirects(s) == s
 
 
 # --- evaluate_single_cmd ---
@@ -665,15 +703,88 @@ class TestHookIntegration:
 
     # --- Redirection to files (unsandboxed) ---
 
-    def test_redirect_to_file_unsandboxed_asks(self):
+    def test_redirect_to_tmp_unsandboxed_allows(self):
+        """Redirect to /tmp/... is treated like tee /tmp/..."""
         assert get_decision("Bash", {
             "command": "gh pr view 4 > /tmp/out",
             "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_redirect_append_to_tmp_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 >> /tmp/out 2>&1",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_redirect_to_tmpdir_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 > $TMPDIR/out",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_redirect_to_etc_unsandboxed_asks(self):
+        """Redirects to non-/tmp paths still trip the metacheck."""
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 > /etc/passwd",
+            "dangerouslyDisableSandbox": True,
         }) == "ask"
+
+    def test_redirect_path_traversal_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 > /tmp/../etc/passwd",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_redirect_command_substitution_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "gh pr view 4 > /tmp/$(whoami)",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_redirect_and_chain_with_wc_unsandboxed_allows(self):
+        """The motivating case: gh api > /tmp/foo && wc -l /tmp/foo."""
+        assert get_decision("Bash", {
+            "command": "gh api repos/foo/bar > /tmp/x && wc -l /tmp/x",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
 
     def test_redirect_to_file_sandboxed_allows(self):
         """Inside sandbox, redirects are contained."""
         assert get_decision("Bash", {"command": "git status > /tmp/out"}) == "allow"
+
+    # --- wc as standalone unsandboxed command ---
+
+    def test_wc_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "wc -l /tmp/claude/foo.json",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_wc_sensitive_path_unsandboxed_allows(self):
+        """wc emits only counts, not contents — safe even on sensitive files."""
+        assert get_decision("Bash", {
+            "command": "wc -l /home/x/.ssh/id_rsa",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_cat_unsandboxed_asks(self):
+        """cat would leak file contents — not allowlisted."""
+        assert get_decision("Bash", {
+            "command": "cat /etc/passwd",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_head_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "head /etc/passwd",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_grep_recursive_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "grep -r secret /",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
 
     # --- gh api hardened flag forms ---
 

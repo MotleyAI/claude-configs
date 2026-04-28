@@ -69,6 +69,8 @@ SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    # wc only emits counts, not file contents — safe even on sensitive paths
+    r"^wc\b",
 ]
 
 
@@ -223,6 +225,20 @@ def is_safe_tee_path(p):
     return False
 
 
+# File redirects to /tmp/... or $TMPDIR/... — same destination rules as tee.
+# Covers >, >>, 2>, 2>>, &>, &>>.
+SAFE_TMP_REDIRECT = re.compile(
+    r'\s*(?:&>>|&>|2>>|2>|>>|>)\s*(/tmp/[^\s;|&<>]+|\$TMPDIR(?:/[^\s;|&<>]+)?)'
+)
+
+
+def strip_safe_tmp_redirects(s):
+    """Remove file redirects whose destination satisfies is_safe_tee_path."""
+    def repl(m):
+        return '' if is_safe_tee_path(m.group(1)) else m.group(0)
+    return SAFE_TMP_REDIRECT.sub(repl, s)
+
+
 def is_safe_pipe_target(part):
     """A pipe segment is a safe target if it's a pure read-only consumer
     (head/tail/grep/wc/sort), or a tee invocation whose destinations are
@@ -315,6 +331,7 @@ if tool != "Bash":
 
 # Strip safe redirections and quoted strings for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
+cmd_for_meta_check = strip_safe_tmp_redirects(cmd_for_meta_check)
 cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 
 # Check for truly unsafe metacharacters (not && or |, those are handled below).

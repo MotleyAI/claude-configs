@@ -323,7 +323,8 @@
         "*.pypi.org",
         "files.pythonhosted.org",
         "huggingface.co",
-        "*.huggingface.co"
+        "*.huggingface.co",
+        "api.cerebras.ai"
       ]
     },
     "filesystem": {

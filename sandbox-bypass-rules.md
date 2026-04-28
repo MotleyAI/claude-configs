@@ -20,9 +20,11 @@ Never use `WebFetch` for GitHub API calls — use `gh api` with bypass.
 
 ## When NOT to set `dangerouslyDisableSandbox`
 
-Read-only git operations are local and don't need keyring or network.
-Run them inside the sandbox without the bypass flag:
+Local git operations — both reads AND writes to the local repo — don't
+need keyring or network. Run them inside the sandbox without the bypass
+flag:
 
+Reads:
 - `git log`
 - `git diff` (including `git diff --stat`, `git diff origin/master..HEAD`)
 - `git show`
@@ -33,6 +35,16 @@ Run them inside the sandbox without the bypass flag:
 - `git check-ignore`
 - `git remote -v`
 - `git config --get` (read-only config queries)
+
+Local writes (touch the working tree / local refs only — no remote, no keyring):
+- `git add`
+- `git commit` (including with `-m`/HEREDOC; signing only needs bypass if
+  GPG keyring is involved — current setup commits unsigned)
+- `git checkout` / `git switch` (local branch ops)
+- `git reset` (local)
+- `git stash`
+- `git tag` (local; `git push --tags` is the network part)
+- `git rm`, `git mv`
 
 Setting bypass for any of these will trip the hook with
 `Sandbox bypass: ...` because they aren't on `SAFE_UNSANDBOXED_PATTERNS` —

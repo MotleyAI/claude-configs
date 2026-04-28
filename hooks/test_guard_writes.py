@@ -34,6 +34,8 @@ strip_safe_pipes = _module_globals["strip_safe_pipes"]
 strip_quoted_strings = _module_globals["strip_quoted_strings"]
 evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
 strip_safe_tmp_redirects = _module_globals["strip_safe_tmp_redirects"]
+NEEDS_UNSANDBOXED_PATTERNS = _module_globals["NEEDS_UNSANDBOXED_PATTERNS"]
+NEEDS_UNSANDBOXED = _module_globals["NEEDS_UNSANDBOXED"]
 
 
 def run_hook(tool_name, tool_input):
@@ -371,8 +373,10 @@ class TestEvaluateSingleCmd:
         decision, reason = evaluate_single_cmd("git push", True)
         assert decision == "ask"
 
-    def test_gh_read_allows(self):
-        assert evaluate_single_cmd("gh pr view 4", False) == ("allow", None)
+    def test_gh_read_sandboxed_denies(self):
+        decision, reason = evaluate_single_cmd("gh pr view 4", False)
+        assert decision == "deny"
+        assert reason == NEEDS_UNSANDBOXED
 
     def test_gh_write_sandboxed_denies(self):
         decision, reason = evaluate_single_cmd("gh pr create", False)
@@ -527,22 +531,29 @@ class TestHookIntegration:
     def test_docker_denies_sandboxed(self):
         assert get_decision("Bash", {"command": "docker run hello"}) == "deny"
 
-    # gh commands
-    def test_gh_pr_view_allows(self):
-        assert get_decision("Bash", {"command": "gh pr view 4"}) == "allow"
+    # gh commands — all denied inside sandbox (need bypass for keyring/network)
+    def test_gh_pr_view_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "gh pr view 4"}) == "deny"
 
     def test_gh_pr_create_denies_sandboxed(self):
         assert get_decision("Bash", {"command": "gh pr create"}) == "deny"
 
-    def test_gh_api_read_allows(self):
-        assert get_decision("Bash", {"command": "gh api repos/foo/bar"}) == "allow"
+    def test_gh_api_read_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "gh api repos/foo/bar"}) == "deny"
 
     def test_gh_api_post_denies_sandboxed(self):
         assert get_decision("Bash", {"command": "gh api --method POST repos/foo/bar"}) == "deny"
 
-    # Safe redirections
+    def test_gh_api_read_sandboxed_message(self):
+        """User must see the clear instruction to use bypass."""
+        out = run_hook("Bash", {"command": "gh api repos/foo/bar"})
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert out["hookSpecificOutput"]["permissionDecisionReason"] == NEEDS_UNSANDBOXED
+
+    # Safe redirections — verify metacheck still strips them. Use a non-gh
+    # producer so the gh-deny rule doesn't dominate the assertion.
     def test_stderr_redirect_not_compound(self):
-        assert get_decision("Bash", {"command": "gh api repos/foo/bar 2>&1"}) == "allow"
+        assert get_decision("Bash", {"command": "git log --oneline 2>&1"}) == "allow"
 
     # Sandbox bypass
     def test_unsandboxed_gh_read_allows(self):
@@ -636,8 +647,9 @@ class TestHookIntegration:
         """&& inside quotes should not split — treat as single safe command."""
         assert get_decision("Bash", {"command": 'echo "foo && bar"'}) == "allow"
 
-    def test_and_chain_with_gh_read_allows(self):
-        assert get_decision("Bash", {"command": "git status && gh pr view 4"}) == "allow"
+    def test_and_chain_with_gh_read_sandboxed_denies(self):
+        """gh in a chain inside sandbox now denies — bypass needed."""
+        assert get_decision("Bash", {"command": "git status && gh pr view 4"}) == "deny"
 
     def test_and_chain_with_gh_write_denies_sandboxed(self):
         assert get_decision("Bash", {"command": "git status && gh pr create"}) == "deny"
@@ -678,8 +690,9 @@ class TestHookIntegration:
         assert get_decision("Bash", {"command": "git status && git log | head"}) == "allow"
 
     def test_redirect_with_safe_pipe(self):
+        """Verify redirect + safe pipe composition with a non-gh producer."""
         assert get_decision("Bash", {
-            "command": "gh api repos/foo/bar 2>&1 | head -20"
+            "command": "git log --oneline 2>&1 | head -20"
         }) == "allow"
 
     def test_pytest_with_grep(self):
@@ -785,6 +798,38 @@ class TestHookIntegration:
             "command": "grep -r secret /",
             "dangerouslyDisableSandbox": True,
         }) == "ask"
+
+    # --- git fetch deny inside sandbox (parity with gh) ---
+
+    def test_git_fetch_sandboxed_denies(self):
+        out = run_hook("Bash", {"command": "git fetch"})
+        assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert out["hookSpecificOutput"]["permissionDecisionReason"] == NEEDS_UNSANDBOXED
+
+    def test_git_fetch_with_remote_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "git fetch origin main"}) == "deny"
+
+    def test_git_fetch_with_flags_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "git --no-pager fetch --tags"}) == "deny"
+
+    def test_git_fetch_unsandboxed_still_allows(self):
+        """Bypass path unchanged — git fetch in SAFE_UNSANDBOXED_PATTERNS."""
+        assert get_decision("Bash", {
+            "command": "git fetch",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # --- regression: don't over-match local git or affect git push ---
+
+    def test_git_status_still_allows(self):
+        assert get_decision("Bash", {"command": "git status"}) == "allow"
+
+    def test_git_log_still_allows(self):
+        assert get_decision("Bash", {"command": "git log --oneline"}) == "allow"
+
+    def test_git_push_still_denies(self):
+        """git push goes through ASK_ALWAYS_PATTERNS, separate from fetch."""
+        assert get_decision("Bash", {"command": "git push"}) == "deny"
 
     # --- gh api hardened flag forms ---
 

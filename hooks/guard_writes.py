@@ -73,6 +73,14 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^wc\b",
 ]
 
+# Commands that genuinely need network + keyring — must run with bypass.
+# Inside the sandbox these are denied with a clear message instead of being
+# allowed and then failing opaquely at runtime.
+NEEDS_UNSANDBOXED_PATTERNS = [
+    r"^gh\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+]
+
 
 def allow():
     print(json.dumps({
@@ -314,12 +322,10 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
                 return ("allow", None)
         return ("ask", f"Sandbox bypass: {stripped[:120]}")
 
-    # gh commands inside sandbox: allow known reads, deny writes (need keyring)
-    if re.match(r"^gh\b", normalized):
-        for pattern in GH_READ_PATTERNS:
-            if re.match(pattern, normalized):
-                return ("allow", None)
-        return ("deny", NEEDS_UNSANDBOXED)
+    # Network/keyring commands inside sandbox: deny with clear bypass instruction
+    for pattern in NEEDS_UNSANDBOXED_PATTERNS:
+        if re.match(pattern, normalized):
+            return ("deny", NEEDS_UNSANDBOXED)
 
     # Everything else is contained by the sandbox
     return ("allow", None)

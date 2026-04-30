@@ -1,17 +1,33 @@
 {
   "mcpServers": {
-      "perplexity": {
-    "type": "stdio",
-    "command": "npx",
-    "args": ["-y", "perplexity-mcp"],
-    "env": {
-      "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
-    }
-  },
+    "perplexity": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "perplexity-mcp"
+      ],
+      "env": {
+        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
+      }
+    },
+    "codex": {
+      "type": "stdio",
+      "command": "codex",
+      "args": [
+        "mcp-server"
+      ],
+      "env": {}
+    },
     "gslides": {
       "type": "stdio",
       "command": "python",
-      "args": ["-m", "gslides_api.mcp.server", "--default-format", "domain"]
+      "args": [
+        "-m",
+        "gslides_api.mcp.server",
+        "--default-format",
+        "domain"
+      ]
     },
     "context7": {
       "command": "npx",
@@ -38,7 +54,7 @@
     "figma": {
       "type": "http",
       "url": "http://127.0.0.1:3845/mcp"
-        },
+    },
     "playwright": {
       "type": "stdio",
       "command": "npx",

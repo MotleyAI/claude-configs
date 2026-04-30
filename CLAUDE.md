@@ -40,4 +40,7 @@ Except for when sudo is required - in those cases, give the commands for me to r
 
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
-- Sandbox bypass rules (when to set `dangerouslyDisableSandbox: true` and when not to): see `~/.claude/sandbox-bypass-rules.md`.
+ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
+**Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
+`dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox
+blocks, and running them sandboxed first will be denied by the PreToolUse hook.

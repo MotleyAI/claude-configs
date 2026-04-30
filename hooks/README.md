@@ -12,7 +12,7 @@ Everything auto-approves — the sandbox contains it. Includes compound commands
 
 Exceptions (would fail inside sandbox anyway due to no keyring/socket):
 - `git push`, `docker` → **deny** with "use dangerouslyDisableSandbox: true"
-- `gh` write commands → **deny** with "use dangerouslyDisableSandbox: true"
+- `gh` (any subcommand) and `git fetch` → **deny** with "use dangerouslyDisableSandbox: true"
 - Unsafe pipe targets (`cmd | bash`) → **ask**
 
 ## Bash outside sandbox (`dangerouslyDisableSandbox: true`)
@@ -26,11 +26,15 @@ Exceptions (would fail inside sandbox anyway due to no keyring/socket):
 | `git fetch` | **allow** | Read-only, just needs keyring |
 | `gh` reads (`pr/issue/run/repo list/view`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
 | All other `gh` commands | **ask** | Unknown = assume write |
+| `wc` (standalone) | **allow** | Counts only, no content exposure |
 | Everything else | **ask** | No reason to bypass sandbox |
 
 ## Safe I/O redirections
 
-`2>&1`, `>/dev/null`, `2>/dev/null` are stripped before metacharacter/pipe analysis and don't trigger compound command detection.
+These are stripped before metacharacter/pipe analysis and don't trigger compound command detection:
+
+- `2>&1`, `>/dev/null`, `2>/dev/null` — fd dup and `/dev/null` sinks.
+- `>`, `>>`, `2>`, `2>>`, `&>`, `&>>` to a literal `/tmp/...` or `$TMPDIR/...` path (same destination rules as `tee` — no `..`, no command substitution, no `~`/`$HOME`). Other paths still trip the metacheck under bypass.
 
 ## Command normalization
 

@@ -48,6 +48,15 @@ Do NOT hand-roll `gh api graphql` queries for review threads, and do NOT use
 `isResolved` and miss CodeRabbit's review-summary nitpicks. If the skill is
 missing a flag you need, extend the skill rather than reaching for `gh` directly.
 
+To reply to a CodeRabbit thread (or any PR review thread), ALWAYS use the
+`reply-to-pr-thread` skill (script:
+`~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh`). Do NOT
+call `gh api .../pulls/N/comments/<id>/replies` directly. Body is read from
+stdin; the script parses the discussion URL and prints the new reply's URL.
+Per the global "never resolve CodeRabbit threads" rule, this is the only
+allowed channel for closing the loop on an invalid CodeRabbit comment — never
+call any resolve mutation.
+
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
 **Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
 `dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox

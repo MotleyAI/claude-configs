@@ -3,7 +3,9 @@
     "allow": [
       "Bash(gh:*)",
       "Bash(bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
-      "Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)"
+      "Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
+      "Bash(bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
+      "Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)"
     ],
     "deny": []
   },

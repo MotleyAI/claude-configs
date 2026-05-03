@@ -57,6 +57,14 @@ Per the global "never resolve CodeRabbit threads" rule, this is the only
 allowed channel for closing the loop on an invalid CodeRabbit comment — never
 call any resolve mutation.
 
+To check failed CI checks on a GitHub PR (and fetch their failed-step logs),
+ALWAYS use the `fetch-failed-pr-checks` skill (script:
+`~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh`).
+Do NOT use `gh pr checks` / `gh run view --log` directly — the skill handles
+all three statusCheckRollup typenames (CheckRun / StatusContext / WorkflowRun)
+and bundles failed-step logs in one call. If the skill is missing a flag you
+need, extend the skill rather than reaching for `gh` directly.
+
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
 **Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
 `dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox

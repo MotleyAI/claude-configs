@@ -1,11 +1,11 @@
 ---
 name: process-reviews
-description: Use when the user asks to process / triage / address / handle PR reviews from CodeRabbit and SonarQube together. Fetches unresolved threads from both, validates each against the actual code, handles invalid ones in place (reply on thread / NOSONAR comment), and presents a plan for fixing the valid ones (split into logical groups if more than 3).
+description: Use when the user asks to process / triage / address / handle PR reviews from CodeRabbit, SonarQube, and CI all together. Fetches unresolved threads from both code-review sources plus failed CI checks, validates each against the actual code / log, handles invalid ones in place (reply on thread / NOSONAR comment), and presents a plan for fixing the valid ones (split into logical groups if more than 3).
 ---
 
-# Process unresolved review feedback (CodeRabbit + SonarQube)
+# Process unresolved review feedback (CodeRabbit + SonarQube + failed CI)
 
-Combine CodeRabbit and SonarQube unresolved feedback into a single triage workflow. Stops at a written plan — does not start fixing.
+Combine CodeRabbit, SonarQube, and failed CI feedback into a single triage workflow. Stops at a written plan — does not start fixing.
 
 ## Inputs
 
@@ -19,27 +19,31 @@ Combine CodeRabbit and SonarQube unresolved feedback into a single triage workfl
 
 - **CodeRabbit** — invoke the `fetch-coderabbit-threads` skill (script: `~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh <PR>`). Read the JSON file it writes (`JSON: <path>` last line of stdout) — that's the structured input for the rest of this skill.
 - **SonarQube** — invoke the `sonarqube:sonar-list-issues` skill, scoped to the same PR if Sonar PR analysis is configured, otherwise to the branch. Filter to unresolved issues only (statuses `OPEN`, `CONFIRMED`, `REOPENED`).
+- **Failed CI** — invoke the `fetch-failed-pr-checks` skill (script: `~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh <PR>`). Read its JSON for the failed checks plus failed-step log excerpts.
 
-Run both in parallel — they're independent.
+Run all three in parallel — they're independent.
 
 ### 2. Merge into one normalised list
 
 Build a single in-memory list. Each entry:
 
-- `source`: `"coderabbit"` or `"sonar"`
-- `file`: path relative to repo root
-- `line`: integer or `null` (file-level)
-- `severity`: `critical` | `major` | `minor` | `info` (best-effort mapping; CodeRabbit emoji → severity: 🔴/⚠️ Potential issue → major, 🟡/💡 → minor, 💤 → info)
-- `rule`: Sonar rule key, or thread/comment ID for CodeRabbit
-- `summary`: one-line description
-- `body`: full text (CodeRabbit comment body, or Sonar issue message + rule description)
-- `ref`: thread URL (CodeRabbit) or issue key (Sonar) — needed for invalid handling
+- `source`: `"coderabbit"` | `"sonar"` | `"ci"`
+- `file`: path relative to repo root, or `null` for CI failures (the failure may not map to a single file)
+- `line`: integer or `null`
+- `severity`: `critical` | `major` | `minor` | `info` (best-effort mapping; CodeRabbit emoji → severity: 🔴/⚠️ Potential issue → major, 🟡/💡 → minor, 💤 → info; CI failures default to `major`)
+- `rule`: Sonar rule key, CodeRabbit thread/comment ID, or CI workflow/job name
+- `summary`: one-line description (for CI: `<workflow> / <job>` failed at conclusion `<X>`)
+- `body`: full text (CodeRabbit comment body, Sonar issue message + rule description, or the failed-step log excerpt)
+- `ref`: thread URL (CodeRabbit), Sonar issue key, or run/job URL (CI) — needed for invalid handling and for surfacing in the plan
 
-Don't dedupe across sources blindly — if both flag the same line, keep both. They need separate invalid-handling channels.
+Don't dedupe across sources blindly — if multiple sources flag the same area, keep them all. They need separate invalid-handling channels.
 
-### 3. Validate each issue against the actual code
+### 3. Validate each issue
 
-For each entry, READ the cited file at the cited line(s) and classify as VALID or INVALID. Apply the user's global rules from `~/.claude/CLAUDE.md` (e.g., trust internal code, validate only at boundaries; imports at the top; no compliments). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now.
+For each entry, classify as VALID or INVALID using a source-appropriate signal:
+
+- **CodeRabbit / Sonar** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now.
+- **CI failure** — READ the failed-step log excerpt in the JSON. Classify as INVALID only when the failure is clearly unrelated to this PR's changes (network blip / runner died / well-known flaky test that the user has previously confirmed is flaky / out-of-date Action that times out before doing anything). Otherwise VALID. **A test failure that points at code this PR touched is always VALID** — don't argue your way out of it.
 
 For each entry, write a one-line classification rationale (`why-valid` or `why-invalid`) — used in steps 4 and 5.
 
@@ -69,6 +73,10 @@ Add an inline `NOSONAR` suppression on the offending line(s), with the rule key 
 | SQL | `-- NOSONAR(<rule>) — <reason>` |
 
 Place the comment at the end of the offending line. For multi-line issues (e.g. cognitive complexity on a function), put the suppression on the line Sonar cites.
+
+#### CI failure (invalid — flake / infrastructure)
+
+Do **not** silently dismiss. Surface in the plan as an "INVALID — flake/infra" note with the rationale and the run/job URL. Suggest a rerun in the plan but do **not** run `gh run rerun` automatically — that mutates shared state and needs the user's go-ahead. (If the user later says "rerun it", `gh run rerun <run-id> --repo <repo>` is fine.)
 
 ### 5. Plan for the VALID issues
 

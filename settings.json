@@ -5,7 +5,9 @@
       "Bash(bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
       "Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
       "Bash(bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
-      "Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)"
+      "Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
+      "Bash(bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
+      "Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)"
     ],
     "deny": []
   },

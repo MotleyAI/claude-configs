@@ -40,6 +40,14 @@ Except for when sudo is required - in those cases, give the commands for me to r
 
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
+To fetch unresolved CodeRabbit review threads on a GitHub PR, ALWAYS use the
+`fetch-coderabbit-threads` skill (script:
+`~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh`).
+Do NOT hand-roll `gh api graphql` queries for review threads, and do NOT use
+`gh pr view` / `gh api .../pulls/N/comments` for this — they don't expose
+`isResolved` and miss CodeRabbit's review-summary nitpicks. If the skill is
+missing a flag you need, extend the skill rather than reaching for `gh` directly.
+
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
 **Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
 `dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox

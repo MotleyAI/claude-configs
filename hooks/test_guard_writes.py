@@ -883,3 +883,49 @@ class TestHookIntegration:
         assert get_decision("Bash", {
             "command": "echo hi | tee ~/.bashrc",
         }) == "allow"
+
+
+class TestSkillScriptsUnsandboxed:
+    """Skill scripts that wrap gh and need sandbox bypass should not prompt."""
+
+    # fetch-coderabbit-threads (regression — was already in the allow list)
+    def test_fetch_coderabbit_threads_bash_form_allows(self):
+        assert get_decision("Bash", {
+            "command": "bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 70 --repo MotleyAI/slayer",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # fetch-failed-pr-checks
+    def test_fetch_failed_pr_checks_bash_form_allows(self):
+        assert get_decision("Bash", {
+            "command": "bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh 70",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_fetch_failed_pr_checks_direct_form_allows(self):
+        # normalize_cmd basenames the path when invoked directly.
+        assert get_decision("Bash", {
+            "command": "fetch-failed-pr-checks.sh 70 --repo MotleyAI/slayer",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # reply-to-pr-thread (mutation, but explicitly auto-approved per user)
+    def test_reply_to_pr_thread_bash_form_allows(self):
+        assert get_decision("Bash", {
+            "command": "bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_reply_to_pr_thread_direct_form_allows(self):
+        assert get_decision("Bash", {
+            "command": "reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # don't accidentally allow unrelated scripts under skills/ — pattern must
+    # be specific to the audited filenames
+    def test_unknown_skill_script_still_asks(self):
+        assert get_decision("Bash", {
+            "command": "bash ~/.claude/skills/some-other-script/scripts/foo.sh",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"

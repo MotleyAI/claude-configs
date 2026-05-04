@@ -43,6 +43,18 @@ UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
+# bash invocations safe enough to receive piped stdin. The script's basename
+# (argv[1] of the bash call) is matched against this set. Used for
+# `echo body | bash <known-safe-script> URL` patterns where the script is
+# already audited and trusted.
+SAFE_PIPE_BASH_SCRIPTS = {
+    # reply-to-pr-thread.sh: posts a single PR review-thread reply via
+    # `gh api .../pulls/N/comments/<id>/replies`. The skill description
+    # marks it as "auto-approved globally"; the pipe form would otherwise
+    # trip the unsafe-pipe branch.
+    "reply-to-pr-thread.sh",
+}
+
 # tee is allowed as a pipe target when its destinations are all under /tmp/
 # or $TMPDIR — see is_safe_pipe_target.
 SAFE_TEE_FLAGS = {"-a", "--append", "-i", "--ignore-interrupts", "--"}
@@ -71,6 +83,26 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
+    # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
+    # over PR review threads — read-only, no mutations. Same risk profile as
+    # GH_READ_PATTERNS. Two forms: `bash <path>/fetch-coderabbit-threads.sh ...`
+    # and direct invocation (after normalize_cmd basenames the path).
+    r"^bash\s+\S*\.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads\.sh\b",
+    r"^fetch-coderabbit-threads\.sh\b",
+    # fetch-failed-pr-checks.sh: wraps `gh pr view --json statusCheckRollup` +
+    # `gh run view --log-failed`. Read-only, no mutations.
+    r"^bash\s+\S*\.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks\.sh\b",
+    r"^fetch-failed-pr-checks\.sh\b",
+    # reply-to-pr-thread.sh: POSTs a single review-thread reply via
+    # `gh api -X POST .../pulls/N/comments/<id>/replies`. Auto-approved per
+    # the user's "always allowed" request — mutates GitHub but the blast radius
+    # is one comment, easily deleted via `gh`.
+    r"^bash\s+\S*\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
+    r"^reply-to-pr-thread\.sh\b",
+    # echo: harmless producer used to feed stdin into reply-to-pr-thread.sh
+    # (and similar safe-pipe-bash patterns). Surviving content has no shell
+    # metachars (UNSAFE_META check earlier would have asked first).
+    r"^echo\b",
 ]
 
 # Commands that genuinely need network + keyring — must run with bypass.
@@ -269,6 +301,11 @@ def is_safe_pipe_target(part):
                 if not is_safe_tee_path(tok):
                     return False
         return True
+    # bash invoking a known-safe script (script basename in
+    # SAFE_PIPE_BASH_SCRIPTS) — used for `echo body | bash <safe-script>` flows.
+    if name == "bash" and len(argv) >= 2:
+        if os.path.basename(argv[1]) in SAFE_PIPE_BASH_SCRIPTS:
+            return True
     return False
 
 

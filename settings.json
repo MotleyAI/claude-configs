@@ -3,6 +3,11 @@
     "allow": [
       "Bash(gh:*)",
       "Bash(echo:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
       "Bash(git push:*)",
       "Bash(git pull:*)",
       "Bash(git merge:*)",

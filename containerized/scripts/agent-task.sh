@@ -10,7 +10,7 @@
 #   agent-task --agent codex add-tests "Add unit tests for the auth module"
 #   agent-task --agent opencode refactor "Refactor the API client"
 #
-# Default agent is claude. The `at` alias is installed by install-launcher.sh.
+# Default agent is claude. The `agt` alias is installed by install-launcher.sh.
 
 set -euo pipefail
 

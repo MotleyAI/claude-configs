@@ -9,9 +9,11 @@ known-safe-unsandboxed allowlist. Bypass is meant to be rare and explicit.
 
 Only these commands need keyring/network access outside the sandbox:
 
-- `gh ...` — all `gh` invocations (reads and writes). The hook still
-  separately denies gh writes inside sandbox and asks on bypass for
-  non-allowlisted gh writes.
+- `gh ...` *write* operations need bypass for keyring/network access.
+  `gh` *reads* matching `GH_READ_PATTERNS` (e.g. `gh pr view`, `gh issue
+  list`, `gh api` GETs, `gh auth status`) work inside the sandbox without
+  bypass — and the hook denies sandboxed `gh` writes with a clear "needs
+  unsandboxed" message rather than letting them fail opaquely at runtime.
 - `git fetch` — needs the credential keyring.
 - `git push` — needs the credential keyring; the hook will additionally
   ask before each push regardless of sandbox state.

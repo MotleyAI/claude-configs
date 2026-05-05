@@ -321,6 +321,106 @@ class TestStripSafePipes:
     def test_tee_mixed_safe_unsafe_rejected(self):
         assert strip_safe_pipes("cmd | tee /tmp/a /etc/passwd") is None
 
+    # --- pipe-target arg-aware allowlist (CodeRabbit #12) ---
+    # head/tail/sort/wc with file operands must not be auto-stripped, because
+    # the operand reads a file. Only stdin-mode (flags only, or "-") is safe.
+
+    def test_head_with_file_operand_rejected(self):
+        # `cmd | head /etc/passwd` — head reads /etc/passwd, not stdin
+        assert strip_safe_pipes("gh pr view 4 | head /etc/passwd") is None
+
+    def test_tail_with_file_operand_rejected(self):
+        assert strip_safe_pipes("gh pr view 4 | tail /etc/passwd") is None
+
+    def test_sort_with_file_operand_rejected(self):
+        assert strip_safe_pipes("gh pr view 4 | sort /etc/passwd") is None
+
+    def test_wc_with_file_operand_rejected(self):
+        assert strip_safe_pipes("gh pr view 4 | wc /etc/passwd") is None
+
+    def test_head_flags_only_allowed(self):
+        assert strip_safe_pipes("gh pr view 4 | head -n 5") == "gh pr view 4"
+
+    def test_head_short_flag_allowed(self):
+        assert strip_safe_pipes("gh pr view 4 | head -5") == "gh pr view 4"
+
+    def test_head_dash_stdin_allowed(self):
+        # `head -` explicitly reads from stdin
+        assert strip_safe_pipes("gh pr view 4 | head -") == "gh pr view 4"
+
+    def test_tail_flags_only_allowed(self):
+        assert strip_safe_pipes("git log | tail -n 20") == "git log"
+
+    def test_grep_one_pattern_allowed(self):
+        # `grep PATTERN` with no FILE = reads stdin
+        assert strip_safe_pipes("git log | grep fix") == "git log"
+
+    def test_grep_pattern_plus_file_rejected(self):
+        # `grep PATTERN FILE` reads FILE, not stdin
+        assert strip_safe_pipes("gh pr view 4 | grep root /etc/passwd") is None
+
+    def test_grep_only_flags_allowed(self):
+        # `grep -c` (count, no pattern) — degenerate but harmless on stdin
+        assert strip_safe_pipes("ls | grep -c .") == "ls"
+
+    def test_sort_output_flag_rejected(self):
+        # `sort -o FILE` writes FILE — must not auto-strip
+        assert strip_safe_pipes("ls | sort -o /tmp/owned") is None
+
+    def test_sort_long_output_flag_rejected(self):
+        assert strip_safe_pipes("ls | sort --output=/tmp/owned") is None
+
+    def test_sort_short_output_attached_rejected(self):
+        # `-oFILE` (no space)
+        assert strip_safe_pipes("ls | sort -o/tmp/owned") is None
+
+    def test_sort_with_value_taking_flag_allowed(self):
+        # `sort -k 2 -t :` — both flags take values, no file operands
+        assert strip_safe_pipes("ls | sort -k 2 -t :") == "ls"
+
+    def test_tail_follow_flag_allowed(self):
+        # `-f` is not value-taking on tail; the next token (if non-flag)
+        # would be a file operand. With no operand it's fine.
+        assert strip_safe_pipes("journalctl | tail -f -n 5") == "journalctl"
+
+
+# --- TMPDIR resolution in is_safe_tee_path (CodeRabbit #8) ---
+
+class TestIsSafeTeePathTmpdirResolution:
+    """`$TMPDIR/...` paths should only be considered safe when the resolved
+    TMPDIR env var actually points under /tmp/. If TMPDIR is unset or points
+    elsewhere (e.g. $HOME/tmp), reject the path."""
+
+    def test_tmpdir_unset_rejects(self, monkeypatch):
+        monkeypatch.delenv("TMPDIR", raising=False)
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/x") is False
+
+    def test_tmpdir_pointing_to_tmp_allows(self, monkeypatch):
+        monkeypatch.setenv("TMPDIR", "/tmp")
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/x") is True
+
+    def test_tmpdir_pointing_to_subtmp_allows(self, monkeypatch):
+        monkeypatch.setenv("TMPDIR", "/tmp/claude")
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/x") is True
+
+    def test_tmpdir_pointing_to_home_rejects(self, monkeypatch):
+        monkeypatch.setenv("TMPDIR", "/home/james/tmp")
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/x") is False
+
+    def test_tmpdir_pointing_to_etc_rejects(self, monkeypatch):
+        monkeypatch.setenv("TMPDIR", "/etc")
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/passwd") is False
+
+    def test_bare_tmp_path_unaffected_by_tmpdir(self, monkeypatch):
+        # /tmp/... paths should remain safe regardless of TMPDIR value
+        monkeypatch.setenv("TMPDIR", "/etc")
+        assert _module_globals["is_safe_tee_path"]("/tmp/foo") is True
+
+    def test_tmpdir_path_traversal_still_rejected(self, monkeypatch):
+        # Traversal attempts should be rejected even if TMPDIR is /tmp
+        monkeypatch.setenv("TMPDIR", "/tmp")
+        assert _module_globals["is_safe_tee_path"]("$TMPDIR/../etc/passwd") is False
+
 
 # --- strip_safe_tmp_redirects ---
 
@@ -367,7 +467,7 @@ class TestEvaluateSingleCmd:
 
     def test_plain_git_push_sandboxed_denies(self):
         # Plain push hits NEEDS_UNSANDBOXED_PATTERNS — sandbox blocks keyring.
-        decision, reason = evaluate_single_cmd("git push", False)
+        decision, _reason = evaluate_single_cmd("git push", False)
         assert decision == "deny"
 
     def test_plain_git_push_unsandboxed_allows(self):
@@ -376,12 +476,12 @@ class TestEvaluateSingleCmd:
 
     def test_force_git_push_unsandboxed_asks(self):
         # --force still hits ASK_ALWAYS_PATTERNS regardless of sandbox bypass.
-        decision, reason = evaluate_single_cmd("git push --force", True)
+        decision, _reason = evaluate_single_cmd("git push --force", True)
         assert decision == "ask"
 
     def test_force_git_push_sandboxed_denies(self):
         # Sandboxed force-push: ASK_ALWAYS becomes deny with bypass message.
-        decision, reason = evaluate_single_cmd("git push --force", False)
+        decision, _reason = evaluate_single_cmd("git push --force", False)
         assert decision == "deny"
 
     def test_gh_read_sandboxed_denies(self):
@@ -390,14 +490,14 @@ class TestEvaluateSingleCmd:
         assert reason == NEEDS_UNSANDBOXED
 
     def test_gh_write_sandboxed_denies(self):
-        decision, reason = evaluate_single_cmd("gh pr create", False)
+        decision, _reason = evaluate_single_cmd("gh pr create", False)
         assert decision == "deny"
 
     def test_safe_pipe_stripped(self):
         assert evaluate_single_cmd("git log | head", False) == ("allow", None)
 
     def test_unsafe_pipe_unsandboxed_asks(self):
-        decision, reason = evaluate_single_cmd("ls | bash", True)
+        decision, _reason = evaluate_single_cmd("ls | bash", True)
         assert decision == "ask"
 
     def test_unsafe_pipe_sandboxed_allows(self):
@@ -407,14 +507,14 @@ class TestEvaluateSingleCmd:
         assert evaluate_single_cmd("foo || bar", False) == ("allow", None)
 
     def test_logical_or_unsandboxed_asks(self):
-        decision, reason = evaluate_single_cmd("foo || bar", True)
+        decision, _reason = evaluate_single_cmd("foo || bar", True)
         assert decision == "ask"
 
     def test_unsandboxed_safe(self):
         assert evaluate_single_cmd("gh pr view 4", True) == ("allow", None)
 
     def test_unsandboxed_unknown_asks(self):
-        decision, reason = evaluate_single_cmd("whoami", True)
+        decision, _reason = evaluate_single_cmd("whoami", True)
         assert decision == "ask"
 
 

@@ -304,13 +304,23 @@ def split_on_pipe(cmd):
 
 def is_safe_tee_path(p):
     """A tee destination is safe if it's an unambiguous path under /tmp/
-    or $TMPDIR — no path traversal, no command substitution, no ~/$HOME."""
+    or $TMPDIR (where $TMPDIR resolves to a path under /tmp/) — no path
+    traversal, no command substitution, no ~/$HOME."""
     if ".." in p or "`" in p or "~" in p:
         return False
     if p.startswith("/tmp/") and "$" not in p:
         return True
     if p == "$TMPDIR" or p.startswith("$TMPDIR/"):
-        return p.count("$") == 1
+        if p.count("$") != 1:
+            return False
+        # $TMPDIR is only safe when it actually resolves under /tmp/.
+        # Without this check, an attacker who controls TMPDIR (e.g. exporting
+        # TMPDIR=/etc) could direct a tee write outside /tmp.
+        tmpdir = os.environ.get("TMPDIR", "")
+        if not tmpdir:
+            return False
+        # Normalize trailing slash so /tmp and /tmp/ both count as under /tmp.
+        return tmpdir == "/tmp" or tmpdir.startswith("/tmp/")
     return False
 
 
@@ -328,10 +338,35 @@ def strip_safe_tmp_redirects(s):
     return SAFE_TMP_REDIRECT.sub(repl, s)
 
 
+# Flags that consume the next argv token as a value (not a file operand).
+# Per-command list — keeps us from mis-parsing `tail -f file` (where -f
+# doesn't take a value) as if `-f` were value-taking.
+_VALUE_TAKING_FLAGS = {
+    "head": {"-n", "-c", "--lines", "--bytes"},
+    "tail": {"-n", "-c", "--lines", "--bytes", "--pid", "--max-unchanged-stats"},
+    "sort": {"-k", "-t", "-T", "-S", "--key", "--field-separator",
+             "--temporary-directory", "--buffer-size", "--parallel",
+             "--compress-program", "--files0-from", "--batch-size"},
+    "wc": set(),
+}
+
+# Flags on these commands that perform a WRITE — must reject even if the
+# operand looks like a value. `sort -o FILE` writes to FILE.
+_WRITE_FLAGS = {
+    "sort": ("-o", "--output", "-o", "--output="),  # short forms `-oFILE` handled below
+}
+
+
 def is_safe_pipe_target(part):
     """A pipe segment is a safe target if it's a pure read-only consumer
-    (head/tail/grep/wc/sort), or a tee invocation whose destinations are
-    all safe paths."""
+    (head/tail/grep/wc/sort) **with no file operands**, or a tee invocation
+    whose destinations are all safe paths.
+
+    Without the no-file-operand check, a name-only allowlist would pass
+    `cmd | head /etc/passwd` — `head` matches by name, the pipe gets
+    stripped, and the producer auto-allows. The `head` invocation then
+    reads /etc/passwd unsandboxed.
+    """
     try:
         argv = shlex.split(part)
     except ValueError:
@@ -340,7 +375,43 @@ def is_safe_pipe_target(part):
         return False
     name = os.path.basename(argv[0])
     if name in SAFE_PIPE_TARGETS:
-        return True
+        args = argv[1:]
+        if name in {"head", "tail", "sort", "wc"}:
+            # Reject explicit write flags up front (e.g. `sort -o FILE`).
+            for a in args:
+                if name in _WRITE_FLAGS:
+                    if a in {"-o", "--output"} or a.startswith("--output=") or (a.startswith("-o") and len(a) > 2):
+                        return False
+            # Walk argv: each token must be either a flag, the stdin marker
+            # `-`, or the value consumed by the *previous* value-taking flag.
+            value_taking = _VALUE_TAKING_FLAGS.get(name, set())
+            i = 0
+            while i < len(args):
+                a = args[i]
+                if a == "-":
+                    i += 1
+                    continue
+                if a.startswith("-"):
+                    # `--flag=value` carries its value attached, no consumption needed.
+                    if a in value_taking and "=" not in a and i + 1 < len(args):
+                        i += 2  # skip the consumed value
+                    else:
+                        i += 1
+                    continue
+                # Non-flag, non-stdin, non-value token = file operand → reject.
+                return False
+            return True
+        if name == "grep":
+            # `grep [flags] PATTERN` reads stdin; `grep [flags] PATTERN FILE`
+            # reads FILE. Allow at most one non-flag arg (the PATTERN).
+            # grep's value-taking flags (-e, -f, --regexp=, --file=) make
+            # the pattern explicit, but the conservative count-non-flags
+            # rule is good enough — file operands push the count >1.
+            non_flags = [a for a in args if not a.startswith("-") and a != "-"]
+            return len(non_flags) <= 1
+        # Should not reach here — every name in SAFE_PIPE_TARGETS is handled
+        # above. Defensive return.
+        return False
     if name == "tee":
         for tok in argv[1:]:
             if tok.startswith("-"):

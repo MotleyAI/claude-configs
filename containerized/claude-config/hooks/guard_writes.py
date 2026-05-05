@@ -17,6 +17,7 @@ Exit 1  -> stderr is shown to the user as a warning; the normal
 """
 import json
 import re
+import shlex
 import sys
 
 EXTERNAL = [
@@ -36,11 +37,46 @@ EXTERNAL = [
 
 SPLIT = re.compile(r"\|\||&&|;|\||&")
 
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _token_scan(s: str) -> bool:
+    """Token-aware fallback for cases the regex list misses because of
+    flag reordering: `git -C /p push`, `gh api /repos -X POST`, `gh api ...
+    --method=PATCH`, `gh api ... -XPOST`. Case-insensitive on the method.
+    """
+    try:
+        toks = shlex.split(s)
+    except ValueError:
+        return False
+    if not toks:
+        return False
+    head = toks[0]
+    # `git ... push` anywhere in argv (catches `git -C /p push origin`)
+    if head == "git" and "push" in toks[1:]:
+        return True
+    # `gh api ...` with a write method passed via -X / --method in any position
+    if head == "gh" and len(toks) >= 2 and toks[1] == "api":
+        for i, t in enumerate(toks):
+            # `-X POST`, `--method POST`
+            if t in {"-X", "-x", "--method"} and i + 1 < len(toks):
+                if toks[i + 1].upper() in WRITE_METHODS:
+                    return True
+            # `--method=POST`, `--METHOD=PATCH`
+            if t.lower().startswith("--method=") and t.split("=", 1)[1].upper() in WRITE_METHODS:
+                return True
+            # `-XPOST`, `-xPOST`
+            if t[:2] in {"-X", "-x"} and len(t) > 2 and t[2:].upper() in WRITE_METHODS:
+                return True
+    return False
+
 
 def offending(cmd: str) -> str | None:
     for sub in SPLIT.split(cmd):
         s = sub.strip()
         if any(p.match(s) for p in EXTERNAL):
+            return s
+        if _token_scan(s):
             return s
     return None
 

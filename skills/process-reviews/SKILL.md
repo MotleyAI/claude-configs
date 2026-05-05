@@ -65,12 +65,19 @@ Reference the relevant `CLAUDE.md` rule or commit hash when possible — gives t
 
 Add an inline `NOSONAR` suppression on the offending line(s), with the rule key and a short reason. Bare `// NOSONAR` is forbidden — always include rule and reason.
 
+The rule key inside `NOSONAR(...)` MUST be alphanumeric only (e.g. `S125`, `S7632`). Do NOT include the language prefix like `python:` / `javascript:` — Sonar's own `python:S7632` rule rejects `# NOSONAR(python:S125)` as malformed, and a malformed suppression silently suppresses nothing.
+
 | Language family | Syntax |
 |---|---|
 | Python, Shell, Ruby, YAML | `# NOSONAR(<rule>) — <reason>` |
 | C, C++, Java, JS, TS, Go, Rust, Scala | `// NOSONAR(<rule>) — <reason>` |
 | HTML, XML, Vue templates | `<!-- NOSONAR(<rule>) — <reason> -->` |
 | SQL | `-- NOSONAR(<rule>) — <reason>` |
+
+Examples:
+- ✅ `# NOSONAR(S125) — arithmetic explanation, not commented-out code`
+- ❌ `# NOSONAR(python:S125) — ...` (colon in rule key — silently fails to parse)
+- ❌ `# NOSONAR` (bare — no rule key, no reason)
 
 Place the comment at the end of the offending line. For multi-line issues (e.g. cognitive complexity on a function), put the suppression on the line Sonar cites.
 
@@ -103,7 +110,7 @@ Do **not** start writing code until the user picks.
 ## Constraints
 
 - NEVER call any "resolve" mutation on CodeRabbit threads (no `resolveReviewThread`, no UI-equivalent). Only `/replies`. This is a hard global rule from the user.
-- NOSONAR suppressions MUST include the rule key and a reason. Bare `// NOSONAR` is forbidden.
+- NOSONAR suppressions MUST include the rule key and a reason. Bare `// NOSONAR` is forbidden. The rule key inside the parentheses must be alphanumeric only — never include the `python:` / `javascript:` / etc. language prefix (it makes Sonar treat the suppression as malformed).
 - This skill stops at the plan. Code fixes happen only after the user picks a group.
 - If validation makes you LESS than 80% confident an issue is invalid, classify it as VALID and put it in the plan. Better to over-fix than to silently dismiss a real bug.
 

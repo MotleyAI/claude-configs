@@ -94,7 +94,11 @@ cd "$PRIMARY"
 
 # ── core CU config ──────────────────────────────────────────────────────────
 echo "→ Registering container-use as MCP server for this repo"
-claude mcp add container-use -- container-use stdio || true
+if ! claude mcp list 2>/dev/null | grep -qE '^container-use(\s|$)'; then
+  claude mcp add container-use -- container-use stdio
+else
+  echo "  (already registered — skipping)"
+fi
 
 echo "→ Setting base image to agent-base:latest"
 container-use config base-image set agent-base:latest
@@ -123,6 +127,11 @@ container-use config volume add "$HOME/.cache/uv:/uv-cache"
 # ── extra-repo setup commands (Case B) ──────────────────────────────────────
 for repo in "${EXTRA_REPOS[@]}"; do
   name="$(basename "$repo")"
+  if [[ ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "error: unsupported repo name '$name' (allowed chars: A-Z a-z 0-9 . _ -)" >&2
+    echo "       refusing to interpolate it into a shell command" >&2
+    exit 1
+  fi
   echo "→ Adding setup command: clone $name"
   container-use config setup add "git clone --local /host-repos/$name /workspace/$name"
   if [[ -f "$repo/uv.lock" ]]; then

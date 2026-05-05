@@ -64,6 +64,10 @@ else
 fi
 
 if ! have claude; then
+  if ! have npm; then
+    echo "error: npm not found — install Node (omit --skip-node) or install claude manually" >&2
+    exit 2
+  fi
   say "Installing Claude Code (host)"
   npm install -g @anthropic-ai/claude-code
 else
@@ -71,6 +75,10 @@ else
 fi
 
 if ! have codex; then
+  if ! have npm; then
+    echo "error: npm not found — install Node (omit --skip-node) or install codex manually" >&2
+    exit 2
+  fi
   say "Installing Codex CLI (host)"
   npm install -g @openai/codex
 else

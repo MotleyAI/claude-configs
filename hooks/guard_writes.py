@@ -61,8 +61,18 @@ SAFE_TEE_FLAGS = {"-a", "--append", "-i", "--ignore-interrupts", "--"}
 
 # Patterns for commands that are always dangerous
 ASK_ALWAYS_PATTERNS = [
-    # git push (with any flags/args) — mutates remote
-    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
+    # git push --force / --force-with-lease / --force-with-includes / --force-if-includes
+    # (any token starting with --force after `push` — \b after `force` matches the
+    # transition into `-with-…` since `-` is non-word).
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s--force\b",
+    # git push -f (short form of --force)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s-f\b",
+    # git push --delete / -d  (deletes a remote ref)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s(?:--delete|-d)\b",
+    # git push origin :branch  (deletion via empty-source refspec)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b\s+\S+\s+:\S",
+    # git push origin +branch  (force-push refspec)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b\s+\S+\s+\+\S",
     # docker — always ask
     r"^docker\b",
 ]
@@ -81,6 +91,20 @@ SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    # git push (plain — dangerous variants are caught earlier by
+    # ASK_ALWAYS_PATTERNS, so anything reaching here is non-force, non-delete).
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
+    # git pull (fetch + merge): needs keyring, mutations are local-only and reversible
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
+    # git merge: local-only, can trigger signing/hooks that need keyring access
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
+    # git remote -v (and other read-only `git remote` subcommands): just
+    # reads .git/config, no network. Safe even unsandboxed.
+    # Allowed: `remote` (list), `remote -v`, `remote show <name>`, `remote get-url <name>`
+    # Not allowed: `remote add`, `remote remove`, `remote rename`, `remote set-url`, `remote prune`
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\b\s*$",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+-v\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+(show|get-url)\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
     # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
@@ -111,6 +135,31 @@ SAFE_UNSANDBOXED_PATTERNS = [
 NEEDS_UNSANDBOXED_PATTERNS = [
     r"^gh\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
+]
+
+# Patterns that are denied with a custom message rather than the generic
+# NEEDS_UNSANDBOXED bypass advice. Used for variants where the right answer
+# is "run a SAFER form of the same command". Checked BEFORE ASK_ALWAYS,
+# SAFE_UNSANDBOXED, and NEEDS_UNSANDBOXED — match wins regardless of
+# sandbox state.
+DENY_WITH_ADVICE_PATTERNS = [
+    (
+        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+pull\b.*\s(?:--rebase|-r)\b",
+        "Use plain `git pull` instead — `--rebase` rewrites local history and can lose in-progress work on conflicts.",
+    ),
+    (
+        # `-X theirs|ours` and `--strategy-option=theirs|ours` and `-Xtheirs|-Xours`
+        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+merge\b.*\s(?:-X\s+(?:theirs|ours)|--strategy-option=(?:theirs|ours)|-X(?:theirs|ours))\b",
+        "Use plain `git merge` instead — `theirs/ours` strategy silently overrides one side on every conflict (resolve manually).",
+    ),
+    (
+        # --squash collapses history without producing a merge commit
+        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+merge\b.*\s--squash\b",
+        "Use plain `git merge` instead — `--squash` discards the merge commit and the per-commit history of the incoming branch.",
+    ),
 ]
 
 
@@ -345,7 +394,13 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
 
     normalized = normalize_cmd(cleaned)
 
-    # Check always-dangerous patterns (git push, docker)
+    # Check deny-with-advice patterns first (e.g. `git pull --rebase` →
+    # use plain `git pull` instead). Match wins regardless of sandbox state.
+    for pattern, advice in DENY_WITH_ADVICE_PATTERNS:
+        if re.match(pattern, normalized):
+            return ("deny", advice)
+
+    # Check always-dangerous patterns (git push --force, docker)
     for pattern in ASK_ALWAYS_PATTERNS:
         if re.match(pattern, normalized):
             if unsandboxed:

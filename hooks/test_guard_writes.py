@@ -365,13 +365,24 @@ class TestEvaluateSingleCmd:
     def test_safe_command(self):
         assert evaluate_single_cmd("ls -la", False) == ("allow", None)
 
-    def test_dangerous_git_push_sandboxed_denies(self):
+    def test_plain_git_push_sandboxed_denies(self):
+        # Plain push hits NEEDS_UNSANDBOXED_PATTERNS — sandbox blocks keyring.
         decision, reason = evaluate_single_cmd("git push", False)
         assert decision == "deny"
 
-    def test_dangerous_git_push_unsandboxed_asks(self):
-        decision, reason = evaluate_single_cmd("git push", True)
+    def test_plain_git_push_unsandboxed_allows(self):
+        # Plain push is auto-approved unsandboxed (SAFE_UNSANDBOXED_PATTERNS).
+        assert evaluate_single_cmd("git push", True) == ("allow", None)
+
+    def test_force_git_push_unsandboxed_asks(self):
+        # --force still hits ASK_ALWAYS_PATTERNS regardless of sandbox bypass.
+        decision, reason = evaluate_single_cmd("git push --force", True)
         assert decision == "ask"
+
+    def test_force_git_push_sandboxed_denies(self):
+        # Sandboxed force-push: ASK_ALWAYS becomes deny with bypass message.
+        decision, reason = evaluate_single_cmd("git push --force", False)
+        assert decision == "deny"
 
     def test_gh_read_sandboxed_denies(self):
         decision, reason = evaluate_single_cmd("gh pr view 4", False)
@@ -413,14 +424,34 @@ class TestAskAlwaysPatterns:
     def _matches_dangerous(self, cmd):
         return any(re.match(p, cmd) for p in ASK_ALWAYS_PATTERNS)
 
-    def test_git_push(self):
-        assert self._matches_dangerous("git push")
+    def test_plain_git_push_not_dangerous(self):
+        # Plain push is no longer in ASK_ALWAYS — it's been moved to
+        # SAFE_UNSANDBOXED_PATTERNS so it auto-approves when bypassing sandbox.
+        assert not self._matches_dangerous("git push")
 
-    def test_git_push_with_remote(self):
-        assert self._matches_dangerous("git push origin main")
+    def test_plain_git_push_with_remote_not_dangerous(self):
+        assert not self._matches_dangerous("git push origin main")
 
     def test_git_push_force(self):
         assert self._matches_dangerous("git --no-pager push --force")
+
+    def test_git_push_force_with_lease(self):
+        assert self._matches_dangerous("git push --force-with-lease origin main")
+
+    def test_git_push_short_force(self):
+        assert self._matches_dangerous("git push -f origin main")
+
+    def test_git_push_delete_long(self):
+        assert self._matches_dangerous("git push --delete origin egor/foo")
+
+    def test_git_push_delete_short(self):
+        assert self._matches_dangerous("git push -d origin egor/foo")
+
+    def test_git_push_deletion_refspec(self):
+        assert self._matches_dangerous("git push origin :egor/foo")
+
+    def test_git_push_force_refspec(self):
+        assert self._matches_dangerous("git push origin +egor/foo")
 
     def test_git_status_not_dangerous(self):
         assert not self._matches_dangerous("git status")
@@ -574,11 +605,14 @@ class TestHookIntegration:
             "dangerouslyDisableSandbox": True,
         }) == "ask"
 
-    def test_unsandboxed_git_push_asks(self):
+    def test_unsandboxed_git_push_allows(self):
+        # Plain push moved to SAFE_UNSANDBOXED_PATTERNS — auto-approves
+        # when bypass is in effect. Force / delete variants still ask
+        # (covered in TestGitPush below).
         assert get_decision("Bash", {
             "command": "git push",
             "dangerouslyDisableSandbox": True,
-        }) == "ask"
+        }) == "allow"
 
     # Normalization
     def test_normalized_env_prefix_git_push_denies_sandboxed(self):
@@ -827,8 +861,9 @@ class TestHookIntegration:
     def test_git_log_still_allows(self):
         assert get_decision("Bash", {"command": "git log --oneline"}) == "allow"
 
-    def test_git_push_still_denies(self):
-        """git push goes through ASK_ALWAYS_PATTERNS, separate from fetch."""
+    def test_git_push_sandboxed_denies(self):
+        """git push needs network/keyring — sandboxed it's denied with bypass instruction.
+        Plain (non-force) variant: hits NEEDS_UNSANDBOXED_PATTERNS, not ASK_ALWAYS."""
         assert get_decision("Bash", {"command": "git push"}) == "deny"
 
     # --- gh api hardened flag forms ---
@@ -927,5 +962,330 @@ class TestSkillScriptsUnsandboxed:
     def test_unknown_skill_script_still_asks(self):
         assert get_decision("Bash", {
             "command": "bash ~/.claude/skills/some-other-script/scripts/foo.sh",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+
+class TestGitPush:
+    """git push: plain pushes are auto-approved unsandboxed; force/delete
+    variants always ask; sandboxed pushes are denied with bypass instruction."""
+
+    # --- plain push: allow when unsandboxed, deny when sandboxed ---
+
+    def test_plain_push_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git push",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_push_origin_branch_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git push origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_push_set_upstream_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git push -u origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_push_long_set_upstream_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git push --set-upstream origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_push_refspec_unsandboxed_allows(self):
+        # source:dest refspec where source is non-empty — normal push, not deletion
+        assert get_decision("Bash", {
+            "command": "git push origin HEAD:refs/heads/egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # --- force / force-with-lease / etc.: always ask ---
+
+    def test_push_force_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push --force",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_short_force_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push -f origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_force_with_lease_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push --force-with-lease origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_force_if_includes_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push --force-if-includes origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    # --- delete variants: always ask ---
+
+    def test_push_delete_long_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push --delete origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_delete_short_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git push -d origin egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_deletion_refspec_unsandboxed_asks(self):
+        # `:branch` with no source side deletes the remote branch
+        assert get_decision("Bash", {
+            "command": "git push origin :egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_push_force_refspec_unsandboxed_asks(self):
+        # `+ref` is a force-push refspec
+        assert get_decision("Bash", {
+            "command": "git push origin +egor/foo",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    # --- sandboxed: dangerous variants get denied (NEEDS_UNSANDBOXED) ---
+
+    def test_push_force_sandboxed_denies(self):
+        # When sandboxed, ASK_ALWAYS becomes deny ("This command needs unsandboxed access").
+        # That's a stronger signal than the plain-push case below — both end up "deny"
+        # but for different reasons (ASK_ALWAYS vs NEEDS_UNSANDBOXED).
+        assert get_decision("Bash", {"command": "git push --force"}) == "deny"
+
+    # --- regression: don't accidentally match unrelated git commands ---
+
+    def test_push_substring_in_branch_name_doesnt_match_force(self):
+        # Branch named "force-fix" — push body contains the literal "force" but
+        # not as a flag. Token boundary requires `\s--force\b`; a branch name
+        # `egor/force-fix` lacks the leading space and `--`, so no match.
+        assert get_decision("Bash", {
+            "command": "git push origin egor/force-fix",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+
+class TestGitPullMerge:
+    """git pull / git merge: plain forms auto-approve unsandboxed; --rebase /
+    -X theirs|ours / --squash variants are denied with custom advice telling
+    Claude to use the plain form."""
+
+    # --- plain git pull: deny sandboxed (NEEDS_UNSANDBOXED), allow unsandboxed ---
+
+    def test_plain_pull_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "git pull"}) == "deny"
+
+    def test_plain_pull_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git pull",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_pull_origin_main_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git pull origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_pull_ff_only_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git pull --ff-only",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_pull_no_rebase_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git pull --no-rebase",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # --- plain git merge: deny sandboxed, allow unsandboxed ---
+
+    def test_plain_merge_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "git merge"}) == "deny"
+
+    def test_merge_main_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git merge main",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_merge_abort_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git merge --abort",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_merge_no_ff_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git merge --no-ff main",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_merge_ff_only_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git merge --ff-only main",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # --- pull --rebase / -r: deny with advice, regardless of sandbox ---
+
+    def test_pull_rebase_long_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git pull --rebase",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_rebase_short_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git pull -r origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_rebase_sandboxed_denies(self):
+        assert get_decision("Bash", {"command": "git pull --rebase"}) == "deny"
+
+    def test_pull_rebase_advice_mentions_plain_pull(self):
+        # Sanity-check the deny reason — must steer the user toward the plain form.
+        decision, reason = evaluate_single_cmd("git pull --rebase", True)
+        assert decision == "deny"
+        assert "git pull" in reason
+        assert "rebase" in reason.lower()
+
+    # --- merge -X theirs / ours / --strategy-option=...: deny with advice ---
+
+    def test_merge_x_theirs_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge -X theirs",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_x_theirs_no_space_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge -Xtheirs main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_strategy_option_theirs_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge --strategy-option=theirs main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_x_ours_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge -X ours",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_x_ours_no_space_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge -Xours main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_strategy_option_ours_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge --strategy-option=ours main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_x_advice_mentions_plain_merge(self):
+        decision, reason = evaluate_single_cmd("git merge -X theirs", True)
+        assert decision == "deny"
+        assert "git merge" in reason
+
+    # --- merge --squash: deny with advice ---
+
+    def test_merge_squash_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge --squash main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_squash_advice_mentions_plain_merge(self):
+        decision, reason = evaluate_single_cmd("git merge --squash main", True)
+        assert decision == "deny"
+        assert "git merge" in reason
+        assert "squash" in reason.lower()
+
+    # --- regression: don't accidentally match unrelated commands ---
+
+    def test_mergetool_doesnt_match_merge(self):
+        # `git mergetool` has no word boundary after `merge`, so the merge
+        # patterns shouldn't match. Falls through to the default "ask"
+        # behavior for unsandboxed unknown commands.
+        assert get_decision("Bash", {
+            "command": "git mergetool",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_pull_substring_in_branch_doesnt_match_rebase(self):
+        # Branch named `egor/rebase-fix` — token boundary requires `\s--rebase\b`
+        # or `\s-r\b`; a branch name lacks the leading space-and-flag-prefix.
+        assert get_decision("Bash", {
+            "command": "git pull origin egor/rebase-fix",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+
+class TestGitRemote:
+    """git remote read-only subcommands: auto-approved unsandboxed (no network,
+    just reads .git/config). Mutating subcommands (add/remove/set-url) still
+    fall through to the default ask path."""
+
+    def test_remote_bare_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git remote",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_remote_v_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git remote -v",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_remote_show_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git remote show origin",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_remote_get_url_unsandboxed_allows(self):
+        assert get_decision("Bash", {
+            "command": "git remote get-url origin",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    # --- mutating subcommands fall through to default ask ---
+
+    def test_remote_add_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git remote add upstream https://github.com/foo/bar.git",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_remote_set_url_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git remote set-url origin https://github.com/foo/bar.git",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_remote_remove_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git remote remove origin",
             "dangerouslyDisableSandbox": True,
         }) == "ask"

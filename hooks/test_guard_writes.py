@@ -1177,6 +1177,33 @@ class TestGitPush:
         }) == "allow"
 
 
+class TestSafePipeScriptDirectForm:
+    """SAFE_PIPE_SCRIPTS should accept BOTH `bash <script> ...` and direct
+    `<script> ...` invocations as safe pipe targets. Without the direct
+    form, `echo body | reply-to-pr-thread.sh URL` (the canonical CodeRabbit
+    reply pipeline when the script is on PATH) trips the unsafe-pipe gate."""
+
+    def test_bash_script_form_allows(self):
+        # `echo body | bash <path>/reply-to-pr-thread.sh URL` (regression)
+        assert strip_safe_pipes(
+            "echo body | bash /home/u/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
+        ) == "echo body"
+
+    def test_direct_script_form_allows(self):
+        # `echo body | reply-to-pr-thread.sh URL` (the form CodeRabbit flagged)
+        assert strip_safe_pipes(
+            "echo body | reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
+        ) == "echo body"
+
+    def test_unknown_script_pipe_target_rejected(self):
+        # An arbitrary script piped-into is still rejected
+        assert strip_safe_pipes("echo body | some-other-script.sh") is None
+
+    def test_bash_unknown_script_pipe_rejected(self):
+        # `bash <unknown>.sh` as pipe target is also rejected
+        assert strip_safe_pipes("echo body | bash /tmp/random.sh") is None
+
+
 class TestGitPullMerge:
     """git pull / git merge: plain forms auto-approve unsandboxed; --rebase /
     -X theirs|ours / --squash variants are denied with custom advice telling
@@ -1358,17 +1385,20 @@ class TestGitRemote:
             "dangerouslyDisableSandbox": True,
         }) == "allow"
 
-    def test_remote_show_unsandboxed_allows(self):
-        assert get_decision("Bash", {
-            "command": "git remote show origin",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
-
     def test_remote_get_url_unsandboxed_allows(self):
         assert get_decision("Bash", {
             "command": "git remote get-url origin",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
+
+    # `git remote show <name>` does network/keyring (per `git ls-remote`),
+    # so it shouldn't auto-allow unsandboxed — it needs explicit bypass via
+    # NEEDS_UNSANDBOXED_PATTERNS-equivalent path. Falls through to ask.
+    def test_remote_show_unsandboxed_asks(self):
+        assert get_decision("Bash", {
+            "command": "git remote show origin",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
 
     # --- mutating subcommands fall through to default ask ---
 

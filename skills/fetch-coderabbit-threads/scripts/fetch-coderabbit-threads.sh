@@ -100,7 +100,8 @@ while :; do
                   path
                   line
                   originalLine
-                  comments(first: 50) {
+                  comments(first: 100) {
+                    pageInfo { hasNextPage endCursor }
                     nodes {
                       author { login }
                       body
@@ -129,15 +130,61 @@ while :; do
     fi
 done
 
+# ---- Paginate any thread whose inner comments connection has more pages ----
+# `comments(first: 100)` covers virtually every CodeRabbit thread, but a long
+# back-and-forth could exceed it. Walk threads and fetch the remaining pages
+# via node(id:) so we don't silently truncate.
+threads_paginated="$(mktemp)"
+trap 'rm -f "$threads_all_json" "$threads_paginated"' EXIT
+echo '[]' > "$threads_paginated"
+n_threads=$(jq 'length' "$threads_all_json")
+i=0
+while [ "$i" -lt "$n_threads" ]; do
+    thread="$(jq -c ".[$i]" "$threads_all_json")"
+    has_more="$(echo "$thread" | jq -r '.comments.pageInfo.hasNextPage // false')"
+    cursor="$(echo "$thread" | jq -r '.comments.pageInfo.endCursor // ""')"
+    while [ "$has_more" = "true" ]; do
+        thread_id="$(echo "$thread" | jq -r '.id')"
+        cpage="$(gh api graphql \
+            -F threadId="$thread_id" \
+            -F cursor="$cursor" \
+            -f query='query($threadId: ID!, $cursor: String!) {
+              node(id: $threadId) {
+                ... on PullRequestReviewThread {
+                  comments(first: 100, after: $cursor) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                      author { login }
+                      body
+                      url
+                      createdAt
+                    }
+                  }
+                }
+              }
+            }')"
+        thread="$(jq -n --argjson t "$thread" --argjson p "$(echo "$cpage" | jq '.data.node.comments')" \
+            '$t | .comments.nodes += $p.nodes
+                 | .comments.pageInfo = $p.pageInfo')"
+        has_more="$(echo "$thread" | jq -r '.comments.pageInfo.hasNextPage // false')"
+        cursor="$(echo "$thread" | jq -r '.comments.pageInfo.endCursor // ""')"
+    done
+    jq --argjson t "$thread" '. + [$t]' "$threads_paginated" > "$threads_paginated.tmp"
+    mv "$threads_paginated.tmp" "$threads_paginated"
+    i=$((i + 1))
+done
+
 # Filter: unresolved + (CodeRabbit author unless --all-authors)
 filter_jq='[.[] | select(.isResolved == false)]'
 if [ "$ALL_AUTHORS" -eq 0 ]; then
     filter_jq='[.[] | select(.isResolved == false) | select(any(.comments.nodes[]?.author.login // ""; test("'"$CODERABBIT_LOGIN_RE"'")))]'
 fi
-threads_filtered="$(jq "$filter_jq" "$threads_all_json")"
+threads_filtered="$(jq "$filter_jq" "$threads_paginated")"
 
 # ---- Fetch nitpicks from review bodies (REST) ----
-reviews_raw="$(gh api --paginate "repos/$OWNER/$NAME/pulls/$PR/reviews" 2>/dev/null || echo '[]')"
+# Don't mask errors — set -euo pipefail propagates a real failure (auth /
+# rate-limit / 404) instead of silently turning into "no nitpicks".
+reviews_raw="$(gh api --paginate "repos/$OWNER/$NAME/pulls/$PR/reviews")"
 # --paginate may concatenate JSON arrays; normalise to a single array.
 reviews_json="$(echo "$reviews_raw" | jq -s 'if length == 0 then [] elif (.[0] | type) == "array" then add else . end')"
 
@@ -155,6 +202,11 @@ nitpick_reviews="$(echo "$reviews_json" | jq --arg re "$CODERABBIT_LOGIN_RE" '
 #   <details>...<summary>...Nitpick comments (N)...</summary>BODY</details>
 # or a plain `## Nitpick comments (N)` section. Capture from the marker to the
 # next `</details>` / end-of-string.
+#
+# Per-review fallback: if a particular review's body doesn't match the nitpick
+# regex, keep its full body rather than dropping it. Done inside the
+# transformation (not once at the end) so a mixed-format PR — some reviews
+# matching, some not — preserves nitpicks from BOTH groups.
 nitpicks="$(echo "$nitpick_reviews" | jq '
     def extract_nitpicks(body):
         ( body
@@ -163,17 +215,12 @@ nitpicks="$(echo "$nitpick_reviews" | jq '
     [ .[]
       | . as $r
       | (extract_nitpicks($r.body)) as $m
-      | if $m == null then empty
-        else { url: $r.url, submitted_at: $r.submitted_at, block: ($m.inner1 // $m.inner2 // $m.block) }
+      | if $m != null
+        then { url: $r.url, submitted_at: $r.submitted_at, block: ($m.inner1 // $m.inner2 // $m.block) }
+        else { url: $r.url, submitted_at: $r.submitted_at, block: $r.body }
         end
     ]
 ')"
-
-# Fallback: if the regex extraction missed everything, keep the full review body
-# so the user still sees something rather than silent loss.
-if [ "$(echo "$nitpicks" | jq 'length')" = "0" ] && [ "$(echo "$nitpick_reviews" | jq 'length')" != "0" ]; then
-    nitpicks="$(echo "$nitpick_reviews" | jq '[ .[] | { url: .url, submitted_at: .submitted_at, block: .body } ]')"
-fi
 
 # ---- Write JSON file ----
 ts="$(date -u +%Y%m%d-%H%M%S)"

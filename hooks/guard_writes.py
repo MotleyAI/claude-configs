@@ -43,11 +43,12 @@ UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
-# bash invocations safe enough to receive piped stdin. The script's basename
-# (argv[1] of the bash call) is matched against this set. Used for
-# `echo body | bash <known-safe-script> URL` patterns where the script is
-# already audited and trusted.
-SAFE_PIPE_BASH_SCRIPTS = {
+# Scripts safe enough to receive piped stdin. Matches both the
+# `bash <path>/<script> URL` form and the direct `<script> URL` form
+# (when the script is on PATH or given by basename). The script must be
+# audited and trusted — the pipe target is the *consumer*, so its
+# behavior with arbitrary stdin must be safe.
+SAFE_PIPE_SCRIPTS = {
     # reply-to-pr-thread.sh: posts a single PR review-thread reply via
     # `gh api .../pulls/N/comments/<id>/replies`. The skill description
     # marks it as "auto-approved globally"; the pipe form would otherwise
@@ -98,13 +99,15 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
     # git merge: local-only, can trigger signing/hooks that need keyring access
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
-    # git remote -v (and other read-only `git remote` subcommands): just
-    # reads .git/config, no network. Safe even unsandboxed.
-    # Allowed: `remote` (list), `remote -v`, `remote show <name>`, `remote get-url <name>`
-    # Not allowed: `remote add`, `remote remove`, `remote rename`, `remote set-url`, `remote prune`
+    # Read-only `git remote` subcommands: just reads .git/config, no network.
+    # Safe even unsandboxed.
+    # Allowed: `remote` (list), `remote -v`, `remote get-url <name>`
+    # Not auto-allowed: `remote show <name>` — DOES network (uses git ls-remote
+    # under the hood); falls through to ask-on-bypass so Claude has to opt in.
+    # Not allowed at all: `remote add|remove|rename|set-url|prune` — mutating.
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\b\s*$",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+-v\b",
-    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+(show|get-url)\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+get-url\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
     # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
@@ -421,11 +424,13 @@ def is_safe_pipe_target(part):
                 if not is_safe_tee_path(tok):
                     return False
         return True
-    # bash invoking a known-safe script (script basename in
-    # SAFE_PIPE_BASH_SCRIPTS) — used for `echo body | bash <safe-script>` flows.
-    if name == "bash" and len(argv) >= 2:
-        if os.path.basename(argv[1]) in SAFE_PIPE_BASH_SCRIPTS:
-            return True
+    # Known-safe script as pipe target. Two invocation forms:
+    #   - `echo body | bash <path>/<script> URL`  → name == "bash", argv[1] is the script
+    #   - `echo body | <script> URL`              → name is the script directly (on PATH)
+    if name == "bash" and len(argv) >= 2 and os.path.basename(argv[1]) in SAFE_PIPE_SCRIPTS:
+        return True
+    if name in SAFE_PIPE_SCRIPTS:
+        return True
     return False
 
 

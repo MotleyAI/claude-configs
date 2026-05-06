@@ -1,6 +1,6 @@
 ---
 name: process-reviews
-description: Use when the user asks to process / triage / address / handle PR reviews from CodeRabbit, SonarQube, and CI all together. Fetches unresolved threads from both code-review sources plus failed CI checks, validates each against the actual code / log, handles invalid ones in place (reply on thread / NOSONAR comment), and presents a plan for fixing the valid ones (split into logical groups if more than 3).
+description: Use when the user asks to process / triage / address / handle PR reviews from CodeRabbit, SonarQube, and CI all together. First waits (polling every 5 min, max 30 min) until CodeRabbit, Sonar, and every CI check on the PR are in a terminal state. Then fetches unresolved threads from both code-review sources plus failed CI checks, validates each against the actual code / log, handles invalid ones in place (reply on thread / NOSONAR comment), and presents a plan for fixing the valid ones (split into logical groups if more than 3).
 ---
 
 # Process unresolved review feedback (CodeRabbit + SonarQube + failed CI)
@@ -14,6 +14,55 @@ Combine CodeRabbit, SonarQube, and failed CI feedback into a single triage workf
 - SonarQube project key. Resolve via the sonarqube MCP server's standard lookup order: `.sonarlint/connectedMode.json` → `sonar-project.properties` → `pom.xml`/`build.gradle*`/`package.json` → CI config. If still unresolved, run `sonarqube:sonar-list-projects` (or `mcp__sonarqube__search_my_sonarqube_projects`) and pick the right one with the user's confirmation.
 
 ## Steps
+
+### 0. Wait until reviews and CI are done
+
+Don't fetch anything until every status check on the PR is in a terminal state. Mid-flight checks mean late-arriving CodeRabbit nitpicks, Sonar issues that haven't been computed yet, or test failures that haven't reported — triaging that is wasted work.
+
+A check is **non-terminal** if it's:
+- a `StatusContext` with `state` ∈ {`PENDING`, `EXPECTED`} — this is how CodeRabbit reports, and
+- a `CheckRun` or `WorkflowRun` with `status` ∈ {`QUEUED`, `IN_PROGRESS`, `WAITING`, `REQUESTED`, `PENDING`} — this is how Sonar and GitHub Actions jobs report.
+
+Anything else (`SUCCESS` / `FAILURE` / `ERROR` / `COMPLETED`) counts as terminal — even a failed check is "done". Checks that are *missing entirely* from the rollup (e.g. CodeRabbit not installed on the repo) do not block — only checks that exist AND are non-terminal do.
+
+Run this loop. Bail with a non-zero exit (skill aborts, no fetch, no plan) if the gate doesn't clear within 30 minutes:
+
+```bash
+PR=<pr-number>
+REPO=<owner/repo>
+START=$(date +%s)
+TIMEOUT=$((30 * 60))
+
+while :; do
+  pending=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup --jq '
+    [.statusCheckRollup[]
+     | select(
+         (.__typename == "StatusContext"
+            and (.state == "PENDING" or .state == "EXPECTED"))
+         or ((.__typename == "CheckRun" or .__typename == "WorkflowRun")
+            and (.status == "QUEUED" or .status == "IN_PROGRESS"
+              or .status == "WAITING" or .status == "REQUESTED"
+              or .status == "PENDING"))
+       )
+     | (.name // .context)] | join(", ")')
+
+  if [[ -z "$pending" ]]; then
+    break
+  fi
+
+  elapsed=$(( $(date +%s) - START ))
+  echo "Waiting on: $pending (elapsed $((elapsed/60))m). Sleeping 5m."
+
+  if (( elapsed >= TIMEOUT )); then
+    echo "Gate timed out after 30 min. Still pending: $pending. Aborting."
+    exit 1
+  fi
+
+  sleep 300
+done
+```
+
+Once the loop exits cleanly, proceed to Step 1.
 
 ### 1. Fetch all unresolved feedback (in parallel)
 
@@ -63,9 +112,17 @@ Reference the relevant `CLAUDE.md` rule or commit hash when possible — gives t
 
 #### SonarQube (invalid)
 
-Add an inline `NOSONAR` suppression on the offending line(s), with the rule key and a short reason. Bare `// NOSONAR` is forbidden — always include rule and reason.
+NOSONAR is a code change, and this skill stops at the plan — so do **not**
+apply NOSONAR comments in step 4. Instead, list each invalid Sonar issue in
+the plan (step 5) with the proposed NOSONAR line ready to apply. The user
+picks a group; only then does the suppression actually land.
 
-The rule key inside `NOSONAR(...)` MUST be alphanumeric only (e.g. `S125`, `S7632`). Do NOT include the language prefix like `python:` / `javascript:` — Sonar's own `python:S7632` rule rejects `# NOSONAR(python:S125)` as malformed, and a malformed suppression silently suppresses nothing.
+When the user does pick a group containing invalid Sonar issues, use the
+following format. Bare `// NOSONAR` is forbidden — always include rule and
+reason. The rule key inside `NOSONAR(...)` MUST be alphanumeric only (e.g.
+`S125`, `S7632`); never include the language prefix like `python:` /
+`javascript:` — Sonar's own `python:S7632` rule rejects `# NOSONAR(python:S125)`
+as malformed, and a malformed suppression silently suppresses nothing.
 
 | Language family | Syntax |
 |---|---|
@@ -80,6 +137,8 @@ Examples:
 - ❌ `# NOSONAR` (bare — no rule key, no reason)
 
 Place the comment at the end of the offending line. For multi-line issues (e.g. cognitive complexity on a function), put the suppression on the line Sonar cites.
+
+(CodeRabbit invalid replies stay in step 4 — they're comments, not code changes.)
 
 #### CI failure (invalid — flake / infrastructure)
 

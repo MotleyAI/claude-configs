@@ -99,8 +99,11 @@ if [ -t 0 ]; then
     exit 2
 fi
 
-BODY_FILE="${TMPDIR:-/tmp}/pr-reply-body-$$.md"
-PAYLOAD_FILE="${TMPDIR:-/tmp}/pr-reply-payload-$$.json"
+# Use mktemp so a co-resident process can't pre-create or symlink the
+# target before we write — predictable PID-based names are vulnerable to
+# clobbering on shared hosts.
+BODY_FILE="$(mktemp "${TMPDIR:-/tmp}/pr-reply-body-XXXXXX.md")"
+PAYLOAD_FILE="$(mktemp "${TMPDIR:-/tmp}/pr-reply-payload-XXXXXX.json")"
 trap 'rm -f "$BODY_FILE" "$PAYLOAD_FILE"' EXIT
 
 cat > "$BODY_FILE"

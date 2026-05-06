@@ -60,7 +60,7 @@ In-progress / pending / skipped checks are excluded.
 
 1. Run the script with the PR number the user gave (or infer from `gh pr view --json number -q .number`).
 2. Read the Markdown output and present a concise summary — count, which workflows / jobs failed, the most likely root cause if visible in the log excerpt.
-3. The log excerpt is `--log-failed` filtered, so it already targets failing steps. For deeper inspection, the JSON has `run_id` / `job_id` — call `gh run view --job <job_id> --log` for the full log, or follow the `details_url`.
+3. The log excerpt is `--log-failed` filtered, so it already targets failing steps. If the default 200-line excerpt isn't enough, re-run the script with a larger `--max-log-lines` (e.g. `--max-log-lines 1000`) — extend the skill if you need a flag it doesn't yet support. Don't reach for `gh run view --log` directly; the routing rule in `~/.claude/CLAUDE.md` says to keep this workflow inside the skill.
 
 ## Why use this instead of `gh pr checks` / `gh run view` directly
 

@@ -19,6 +19,28 @@
       ],
       "env": {}
     },
+    "sonarqube": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--init",
+        "--pull=always",
+        "-i",
+        "--rm",
+        "-e",
+        "SONARQUBE_TOKEN",
+        "-e",
+        "SONARQUBE_URL",
+        "-e",
+        "SONARQUBE_ORG",
+        "mcp/sonarqube"
+      ],
+      "env": {
+        "SONARQUBE_TOKEN": "${SONARQUBE_TOKEN}",
+        "SONARQUBE_URL": "${SONARQUBE_URL}",
+        "SONARQUBE_ORG": "${SONARQUBE_ORG}"
+      }
+    },
     "gslides": {
       "type": "stdio",
       "command": "python",
@@ -37,8 +59,8 @@
       ]
     },
     "linear": {
-      "type": "sse",
-      "url": "https://mcp.linear.app/sse"
+      "type": "http",
+      "url": "https://mcp.linear.app/mcp"
     },
     "notion": {
       "type": "stdio",
@@ -54,6 +76,16 @@
     "figma": {
       "type": "http",
       "url": "http://127.0.0.1:3845/mcp"
+    },
+    "slayer": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "motley-slayer",
+        "slayer",
+        "mcp"
+      ]
     },
     "playwright": {
       "type": "stdio",

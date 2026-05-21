@@ -26,6 +26,12 @@ Click View > Download receipt to download.
 https://app.augmentcode.com/account/subscription
 Go to Payment History (will open a new tab), then click on the relevant row
 
+# Cerebras (cerebras.ai LLM inference)
+https://cloud.cerebras.ai/
+Sign in, then if billing access is restricted on the default org, click "Switch to Motley AI" (or whichever org has Billing Active).
+Navigate to Billing > Payment. Under "Invoice history", find the row matching the charge date/amount and click View.
+The Invoice Details dialog has a "Download PDF" link pointing at pay.stripe.com/invoice/.../pdf — fetch that URL with curl.
+
 # Google GSuite and similar
 https://admin.google.com/
 Click on View Transactions/Invoices, then pick the one you need.

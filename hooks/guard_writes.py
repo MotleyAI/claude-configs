@@ -43,17 +43,19 @@ UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
-# Scripts safe enough to receive piped stdin. Matches both the
-# `bash <path>/<script> URL` form and the direct `<script> URL` form
-# (when the script is on PATH or given by basename). The script must be
-# audited and trusted — the pipe target is the *consumer*, so its
-# behavior with arbitrary stdin must be safe.
-SAFE_PIPE_SCRIPTS = {
+# Scripts safe enough to receive piped stdin. Full paths only — a
+# basename-only check would let `bash /tmp/reply-to-pr-thread.sh URL`
+# (an attacker-supplied same-named script) bypass the sandbox. The
+# script must be audited and trusted — the pipe target is the *consumer*,
+# so its behavior with arbitrary stdin must be safe.
+SAFE_PIPE_SCRIPT_PATHS = {
     # reply-to-pr-thread.sh: posts a single PR review-thread reply via
     # `gh api .../pulls/N/comments/<id>/replies`. The skill description
     # marks it as "auto-approved globally"; the pipe form would otherwise
     # trip the unsafe-pipe branch.
-    "reply-to-pr-thread.sh",
+    os.path.expanduser(
+        "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
+    ),
 }
 
 # tee is allowed as a pipe target when its destinations are all under /tmp/
@@ -90,8 +92,9 @@ ASK_ALWAYS_PATTERNS = [
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
     # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
-    # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms
-    r"^gh\s+api\b(?!.*(\s+(-X|--method)\s+|-X|--method=)(POST|PUT|PATCH|DELETE))(?!.*(\s+(-f|--field|-F|--raw-field|--input)\b|-[fF]\S|--field=|--raw-field=|--input=))",
+    # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms.
+    # Method match is case-insensitive — `gh api -X post` / `--method=patch` reach GitHub as writes too.
+    r"^gh\s+api\b(?!.*(\s+(-X|--method)\s+|-X|--method=)(?i:POST|PUT|PATCH|DELETE))(?!.*(\s+(-f|--field|-F|--raw-field|--input)\b|-[fF]\S|--field=|--raw-field=|--input=))",
     r"^gh\s+auth\s+status\b",
 ]
 
@@ -167,6 +170,15 @@ DENY_WITH_ADVICE_PATTERNS = [
         "Use plain `git merge` instead — `theirs/ours` strategy silently overrides one side on every conflict (resolve manually).",
     ),
     (
+        # `-s ours|theirs` / `--strategy=ours|theirs` on merge or pull.
+        # The `ours` strategy discards the other side's tree entirely (not
+        # just per-conflict — the WHOLE merge takes "our" tree); `theirs`
+        # via -s isn't a real git strategy but custom drivers and aliases
+        # can implement it, so deny symmetrically.
+        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+(?:merge|pull)\b.*\s(?:-s\s+(?:ours|theirs)|--strategy=(?:ours|theirs))\b",
+        "Use plain `git merge` / `git pull` — `-s ours/theirs` discards one side's tree entirely (not just per-conflict).",
+    ),
+    (
         # --squash collapses history without producing a merge commit
         r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+merge\b.*\s--squash\b",
         "Use plain `git merge` instead — `--squash` discards the merge commit and the per-commit history of the incoming branch.",
@@ -226,9 +238,24 @@ def strip_quoted_strings(cmd):
     return ''.join(result)
 
 
+_SAFE_BIN_PREFIXES = (
+    "/usr/bin/",
+    "/bin/",
+    "/usr/local/bin/",
+    "/sbin/",
+    "/usr/sbin/",
+)
+
+
 def normalize_cmd(raw):
     """Strip leading env var assignments and command/env prefixes,
-    resolve absolute paths to basenames."""
+    resolve absolute paths under standard system bin dirs to basenames.
+
+    Paths outside the standard bin dirs (e.g. `/tmp/foo`, `/home/u/bin/foo`)
+    keep their full prefix — otherwise an attacker placing a same-named
+    script at `/tmp/<allowed-script>.sh` would match the bare-name allowlist
+    and bypass the sandbox.
+    """
     s = raw.strip()
     # Iteratively strip env var assignments and command/env prefixes
     changed = True
@@ -240,9 +267,10 @@ def normalize_cmd(raw):
         if re.match(r'^(command|env)\s+', s):
             s = re.sub(r'^(command|env)\s+', '', s)
             changed = True
-    # Resolve absolute paths: /usr/bin/git → git
+    # Resolve absolute paths under standard bin dirs: /usr/bin/git → git.
+    # Other absolute paths (e.g. /tmp/foo) are left untouched.
     parts = s.split(None, 1)
-    if parts:
+    if parts and parts[0].startswith(_SAFE_BIN_PREFIXES):
         parts[0] = os.path.basename(parts[0])
         s = ' '.join(parts)
     return s
@@ -453,13 +481,13 @@ def is_safe_pipe_target(part):
                 if not is_safe_tee_path(tok):
                     return False
         return True
-    # Known-safe script as pipe target. Two invocation forms:
-    #   - `echo body | bash <path>/<script> URL`  → name == "bash", argv[1] is the script
-    #   - `echo body | <script> URL`              → name is the script directly (on PATH)
-    if name == "bash" and len(argv) >= 2 and os.path.basename(argv[1]) in SAFE_PIPE_SCRIPTS:
-        return True
-    if name in SAFE_PIPE_SCRIPTS:
-        return True
+    # Known-safe script as pipe target. Only the `bash <full-trusted-path>`
+    # form is accepted — the direct-name form (`script.sh ...`) gave up the
+    # path information that we need to verify the script is the audited one.
+    if name == "bash" and len(argv) >= 2:
+        script_path = os.path.expanduser(argv[1])
+        if script_path in SAFE_PIPE_SCRIPT_PATHS:
+            return True
     return False
 
 

@@ -103,6 +103,27 @@ class TestNormalizeCmd:
     def test_absolute_path(self):
         assert normalize_cmd("/usr/bin/git push") == "git push"
 
+    def test_absolute_path_local_bin(self):
+        assert normalize_cmd("/usr/local/bin/foo arg") == "foo arg"
+
+    def test_absolute_path_sbin(self):
+        assert normalize_cmd("/sbin/ifconfig") == "ifconfig"
+
+    def test_tmp_path_not_basenamed(self):
+        # /tmp/ is NOT a standard bin dir — keep the path so a malicious
+        # `/tmp/git` can't masquerade as `git` in the allowlist.
+        assert normalize_cmd("/tmp/git push") == "/tmp/git push"
+
+    def test_home_bin_path_not_basenamed(self):
+        # User-controlled bin dirs are also not in the safe-prefix list.
+        assert normalize_cmd("/home/user/bin/foo arg") == "/home/user/bin/foo arg"
+
+    def test_tmp_script_not_basenamed(self):
+        # The motivating case: an attacker dropping a same-named script in
+        # /tmp must not normalize to the bare-name allowlist form.
+        assert normalize_cmd("/tmp/fetch-coderabbit-threads.sh 7") == \
+            "/tmp/fetch-coderabbit-threads.sh 7"
+
     def test_combined(self):
         assert normalize_cmd("env GIT_SSH=x /usr/bin/git push") == "git push"
 
@@ -649,6 +670,20 @@ class TestGhReadPatterns:
 
     def test_api_x_patch_no_space_blocked(self):
         assert not self._matches_read("gh api -XPATCH repos/foo/bar")
+
+    def test_api_x_lowercase_post_blocked(self):
+        # GitHub accepts lowercase HTTP method names — the regex must match
+        # them too, or `-X post` bypasses the read-only allowlist.
+        assert not self._matches_read("gh api -X post repos/foo/bar")
+
+    def test_api_lowercase_method_equals_blocked(self):
+        assert not self._matches_read("gh api --method=patch repos/foo/bar")
+
+    def test_api_lowercase_method_space_blocked(self):
+        assert not self._matches_read("gh api --method delete repos/foo/bar")
+
+    def test_api_mixedcase_method_blocked(self):
+        assert not self._matches_read("gh api -X PoSt repos/foo/bar")
 
     def test_api_with_field_blocked(self):
         assert not self._matches_read("gh api repos/foo/bar -f title=test")
@@ -1217,29 +1252,45 @@ class TestGitPush:
 
 
 class TestSafePipeScriptDirectForm:
-    """SAFE_PIPE_SCRIPTS should accept BOTH `bash <script> ...` and direct
-    `<script> ...` invocations as safe pipe targets. Without the direct
-    form, `echo body | reply-to-pr-thread.sh URL` (the canonical CodeRabbit
-    reply pipeline when the script is on PATH) trips the unsafe-pipe gate."""
+    """Pipe-target safe-script allowlist accepts `bash <full-trusted-path>`
+    only. The bare-name direct form and arbitrary paths (`/tmp/<spoofed>.sh`)
+    must be rejected — a basename-only check would let any same-named script
+    bypass the sandbox via the pipe path."""
+
+    _trusted = os.path.expanduser(
+        "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
+    )
 
     def test_bash_script_form_allows(self):
-        # `echo body | bash <path>/reply-to-pr-thread.sh URL` (regression)
+        # `echo body | bash <trusted-full-path>` — the canonical form.
         assert strip_safe_pipes(
-            "echo body | bash /home/u/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
+            f"echo body | bash {self._trusted} https://github.com/x/y/pull/1#discussion_r1"
         ) == "echo body"
 
-    def test_direct_script_form_allows(self):
-        # `echo body | reply-to-pr-thread.sh URL` (the form CodeRabbit flagged)
+    def test_bash_script_with_tilde_allows(self):
+        # The hook expands `~` before the membership check.
+        assert strip_safe_pipes(
+            "echo body | bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
+        ) == "echo body"
+
+    def test_bash_spoofed_path_rejected(self):
+        # `bash /tmp/reply-to-pr-thread.sh ...` — same basename, different
+        # path — must NOT be treated as a safe pipe target.
+        assert strip_safe_pipes(
+            "echo body | bash /tmp/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
+        ) is None
+
+    def test_direct_script_form_rejected(self):
+        # Bare-name direct form drops the path information we'd need to
+        # verify trust — must be rejected.
         assert strip_safe_pipes(
             "echo body | reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
-        ) == "echo body"
+        ) is None
 
     def test_unknown_script_pipe_target_rejected(self):
-        # An arbitrary script piped-into is still rejected
         assert strip_safe_pipes("echo body | some-other-script.sh") is None
 
     def test_bash_unknown_script_pipe_rejected(self):
-        # `bash <unknown>.sh` as pipe target is also rejected
         assert strip_safe_pipes("echo body | bash /tmp/random.sh") is None
 
 
@@ -1372,6 +1423,54 @@ class TestGitPullMerge:
         decision, reason = evaluate_single_cmd("git merge -X theirs", True)
         assert decision == "deny"
         assert "git merge" in reason
+
+    # --- merge / pull -s ours|theirs: deny with advice ---
+
+    def test_merge_strategy_ours_unsandboxed_denies(self):
+        # `-s ours` is more destructive than `-X ours` — it discards the
+        # whole "theirs" tree, not just per-conflict hunks.
+        assert get_decision("Bash", {
+            "command": "git merge -s ours feature",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_long_strategy_ours_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge --strategy=ours feature",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_strategy_theirs_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git merge -s theirs feature",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_strategy_ours_unsandboxed_denies(self):
+        # pull = fetch + merge, so the strategy applies the same way
+        assert get_decision("Bash", {
+            "command": "git pull -s ours origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_long_strategy_theirs_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git pull --strategy=theirs origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_merge_strategy_recursive_still_allowed(self):
+        # `recursive` is git's default strategy — must NOT trip the deny.
+        assert get_decision("Bash", {
+            "command": "git merge -s recursive feature",
+            "dangerouslyDisableSandbox": True,
+        }) == "allow"
+
+    def test_merge_strategy_ours_advice_mentions_plain(self):
+        decision, reason = evaluate_single_cmd("git merge -s ours feature", True)
+        assert decision == "deny"
+        assert "ours" in reason or "theirs" in reason
+        assert "git merge" in reason or "git pull" in reason
 
     # --- merge --squash: deny with advice ---
 

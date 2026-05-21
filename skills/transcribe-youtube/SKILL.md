@@ -26,4 +26,4 @@ python ~/.claude/skills/transcribe-youtube/scripts/youtube-transcript.py <URL> [
 ## Requirements
 
 - `OPENAI_API_KEY` must be set in the environment (for the default Whisper path)
-- Python packages: `yt-dlp`, `openai`, `youtube-transcript-api`
+- Python packages: `yt-dlp`, `openai`, `pydub`, `youtube-transcript-api`

@@ -68,10 +68,14 @@ ASK_ALWAYS_PATTERNS = [
     # (any token starting with --force after `push` — \b after `force` matches the
     # transition into `-with-…` since `-` is non-word).
     r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s--force\b",
-    # git push -f (short form of --force)
-    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s-f\b",
-    # git push --delete / -d  (deletes a remote ref)
-    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s(?:--delete|-d)\b",
+    # git push -f (short form of --force), including bundled short-option
+    # forms like `-fu`, `-uf`, `-vfn` — `f` appears anywhere in a single
+    # `-[letters]+` token. `--` (long-flag prefix) is rejected because
+    # the inner `-` is not a letter and breaks the `[A-Za-z]*f[A-Za-z]*`
+    # match.
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s-[A-Za-z]*f[A-Za-z]*\b",
+    # git push --delete / -d (incl. bundled short-option forms like `-du`)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s(?:--delete|-[A-Za-z]*d[A-Za-z]*)\b",
     # git push --mirror (force-updates all refs and deletes remote refs not
     # present locally — same blast radius as --force + --delete combined)
     r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s--mirror\b",
@@ -165,9 +169,10 @@ DENY_WITH_ADVICE_PATTERNS = [
         "Use plain `git pull` instead — `--rebase` rewrites local history and can lose in-progress work on conflicts.",
     ),
     (
-        # `-X theirs|ours` and `--strategy-option=theirs|ours` and `-Xtheirs|-Xours`
-        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+merge\b.*\s(?:-X\s+(?:theirs|ours)|--strategy-option=(?:theirs|ours)|-X(?:theirs|ours))\b",
-        "Use plain `git merge` instead — `theirs/ours` strategy silently overrides one side on every conflict (resolve manually).",
+        # `-X theirs|ours` and `--strategy-option=theirs|ours` and `-Xtheirs|-Xours`,
+        # for both `merge` and `pull` (pull forwards -X to merge).
+        r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+(?:merge|pull)\b.*\s(?:-X\s+(?:theirs|ours)|--strategy-option=(?:theirs|ours)|-X(?:theirs|ours))\b",
+        "Use plain `git merge` / `git pull` — `theirs/ours` strategy silently overrides one side on every conflict (resolve manually).",
     ),
     (
         # `-s ours|theirs` / `--strategy=ours|theirs` on merge or pull.
@@ -444,11 +449,14 @@ def is_safe_pipe_target(part):
             # `grep [flags] PATTERN` reads stdin; `grep [flags] PATTERN FILE`
             # reads FILE. Reject `-f FILE` / `--file=FILE` outright — those
             # read patterns from FILE, which is a sensitive-file-read bypass
-            # disguised as a pattern source. `-e PATTERN` is fine: the value
-            # is the pattern, not a path. Walk argv so `-e PATTERN` doesn't
-            # push the non-flag count past 1.
+            # disguised as a pattern source. `-e PATTERN` / `--regexp=PATTERN`
+            # supply the pattern through a flag — once seen, any subsequent
+            # positional token is unambiguously a FILE operand and must be
+            # rejected. Without -e/--regexp, allow exactly one positional
+            # (the pattern).
             i = 0
             non_flag_count = 0
+            pattern_via_flag = False
             while i < len(args):
                 a = args[i]
                 if a == "-":
@@ -456,14 +464,24 @@ def is_safe_pipe_target(part):
                     continue
                 if a == "-f" or a == "--file" or a.startswith("--file="):
                     return False
-                if a in {"-e", "-f", "--regexp", "--file"} and "=" not in a:
-                    # Value-taking flag with the value as the next token —
-                    # consume both. (`-f`/`--file` already returned False above.)
-                    i += 2
+                if a == "--regexp" or a.startswith("--regexp="):
+                    pattern_via_flag = True
+                    if a == "--regexp" and i + 1 < len(args):
+                        i += 2
+                        continue
+                    i += 1
+                    continue
+                if a == "-e":
+                    pattern_via_flag = True
+                    i += 2  # consume the pattern value
                     continue
                 if a.startswith("-"):
                     i += 1
                     continue
+                # Positional token. If -e/--regexp already supplied the
+                # pattern, this can only be a FILE operand → reject.
+                if pattern_via_flag:
+                    return False
                 non_flag_count += 1
                 if non_flag_count > 1:
                     return False

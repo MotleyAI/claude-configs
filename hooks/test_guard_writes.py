@@ -401,6 +401,22 @@ class TestStripSafePipes:
         # this; walking argv with -e as value-taking allows it through.
         assert strip_safe_pipes("git log | grep -e fix -e bug") == "git log"
 
+    def test_grep_dash_e_pattern_plus_file_rejected(self):
+        # With `-e PATTERN`, the positional pattern slot is already filled,
+        # so any subsequent non-flag is a FILE operand — must reject.
+        assert strip_safe_pipes("gh pr view 1 | grep -e x /etc/passwd") is None
+
+    def test_grep_long_regexp_plus_file_rejected(self):
+        # `--regexp=PATTERN FILE` — same shape as `-e` form.
+        assert strip_safe_pipes("gh pr view 1 | grep --regexp=x /etc/passwd") is None
+
+    def test_grep_long_regexp_space_plus_file_rejected(self):
+        # `--regexp PATTERN FILE` (space-separated) — same.
+        assert strip_safe_pipes("gh pr view 1 | grep --regexp x /etc/passwd") is None
+
+    def test_grep_dash_e_no_file_allowed(self):
+        assert strip_safe_pipes("git log | grep -e fix") == "git log"
+
     def test_sort_output_flag_rejected(self):
         # `sort -o FILE` writes FILE — must not auto-strip
         assert strip_safe_pipes("ls | sort -o /tmp/owned") is None
@@ -578,6 +594,30 @@ class TestAskAlwaysPatterns:
 
     def test_git_push_short_force(self):
         assert self._matches_dangerous("git push -f origin main")
+
+    def test_git_push_bundled_force_upstream(self):
+        # `-fu` = `-f -u` bundled — the `f` letter must be detected anywhere
+        # in the short-option token.
+        assert self._matches_dangerous("git push -fu origin main")
+
+    def test_git_push_bundled_force_leading(self):
+        assert self._matches_dangerous("git push -uf origin main")
+
+    def test_git_push_bundled_force_middle(self):
+        assert self._matches_dangerous("git push -vfn origin main")
+
+    def test_git_push_bundled_delete(self):
+        assert self._matches_dangerous("git push -du origin egor/foo")
+
+    def test_git_push_safe_bundle_not_dangerous(self):
+        # `-uv` = set-upstream + verbose, no force/delete — must NOT match.
+        assert not self._matches_dangerous("git push -uv origin main")
+
+    def test_git_push_long_flag_with_f_not_dangerous(self):
+        # `--follow-tags` contains an `f` but is a long flag — must NOT
+        # match the short-bundle force pattern (the inner `-` breaks the
+        # `[A-Za-z]*f[A-Za-z]*` match).
+        assert not self._matches_dangerous("git push --follow-tags origin main")
 
     def test_git_push_delete_long(self):
         assert self._matches_dangerous("git push --delete origin egor/foo")
@@ -1465,6 +1505,26 @@ class TestGitPullMerge:
             "command": "git merge -s recursive feature",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
+
+    def test_pull_x_theirs_unsandboxed_denies(self):
+        # `git pull` forwards `-X theirs` to the underlying merge, same
+        # silent-conflict-resolution risk as `git merge -X theirs`.
+        assert get_decision("Bash", {
+            "command": "git pull -X theirs origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_x_ours_no_space_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git pull -Xours origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
+
+    def test_pull_strategy_option_theirs_unsandboxed_denies(self):
+        assert get_decision("Bash", {
+            "command": "git pull --strategy-option=theirs origin main",
+            "dangerouslyDisableSandbox": True,
+        }) == "deny"
 
     def test_merge_strategy_ours_advice_mentions_plain(self):
         decision, reason = evaluate_single_cmd("git merge -s ours feature", True)

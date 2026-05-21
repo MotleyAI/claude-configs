@@ -1,0 +1,65 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git branch*)",
+      "Bash(git fetch*)",
+      "Bash(git stash list*)",
+      "Bash(git remote -v*)",
+      "Bash(gh pr list*)",
+      "Bash(gh pr view*)",
+      "Bash(gh pr checks*)",
+      "Bash(gh pr diff*)",
+      "Bash(gh pr status*)",
+      "Bash(gh issue list*)",
+      "Bash(gh issue view*)",
+      "Bash(gh issue status*)",
+      "Bash(gh run list*)",
+      "Bash(gh run view*)",
+      "Bash(gh run watch*)",
+      "Bash(gh repo view*)",
+      "Bash(gh repo list*)",
+      "Bash(gh release list*)",
+      "Bash(gh release view*)",
+      "Bash(gh api GET*)",
+      "Bash(gh api /*)",
+      "Bash(gh auth status*)",
+      "Bash(cat *)",
+      "Bash(ls*)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(stat *)",
+      "Bash(file *)",
+      "Bash(which *)",
+      "Bash(uv *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(pytest*)",
+      "Bash(npm *)",
+      "Bash(node *)",
+      "Bash(pnpm *)",
+      "Bash(yarn *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /root/.claude/hooks/guard_writes.py"
+          }
+        ]
+      }
+    ]
+  }
+}

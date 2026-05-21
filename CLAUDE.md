@@ -40,5 +40,32 @@ Except for when sudo is required - in those cases, give the commands for me to r
 
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
-- `gh`, `git fetch`, and `git push` commands need `dangerouslyDisableSandbox: true` because they require
-keyring access outside the sandbox. Always use this flag when running these commands.
+To fetch unresolved CodeRabbit review threads on a GitHub PR, ALWAYS use the
+`fetch-coderabbit-threads` skill (script:
+`~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh`).
+Do NOT hand-roll `gh api graphql` queries for review threads, and do NOT use
+`gh pr view` / `gh api .../pulls/N/comments` for this — they don't expose
+`isResolved` and miss CodeRabbit's review-summary nitpicks. If the skill is
+missing a flag you need, extend the skill rather than reaching for `gh` directly.
+
+To reply to a CodeRabbit thread (or any PR review thread), ALWAYS use the
+`reply-to-pr-thread` skill (script:
+`~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh`). Do NOT
+call `gh api .../pulls/N/comments/<id>/replies` directly. Body is read from
+stdin; the script parses the discussion URL and prints the new reply's URL.
+Per the global "never resolve CodeRabbit threads" rule, this is the only
+allowed channel for closing the loop on an invalid CodeRabbit comment — never
+call any resolve mutation.
+
+To check failed CI checks on a GitHub PR (and fetch their failed-step logs),
+ALWAYS use the `fetch-failed-pr-checks` skill (script:
+`~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh`).
+Do NOT use `gh pr checks` / `gh run view --log` directly — the skill handles
+all three statusCheckRollup typenames (CheckRun / StatusContext / WorkflowRun)
+and bundles failed-step logs in one call. If the skill is missing a flag you
+need, extend the skill rather than reaching for `gh` directly.
+
+ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
+**Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
+`dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox
+blocks, and running them sandboxed first will be denied by the PreToolUse hook.

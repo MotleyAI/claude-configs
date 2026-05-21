@@ -1,5 +1,5 @@
 ---
-name: skill-creation
+name: make-skill
 description: Guide for creating valid Claude Code skills. Use when user asks how to create a skill, make a skill, or needs help with skill structure.
 ---
 

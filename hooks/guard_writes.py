@@ -125,22 +125,25 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+get-url\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
+    # Skill scripts are auto-allowed only when invoked via `bash` from a
+    # home-rooted path (`~/.claude/...` or `/home/<user>/.claude/...` or
+    # `/root/.claude/...`). The old `\S*` prefix matched any
+    # path ending in `.claude/skills/...`, so `bash /tmp/.claude/skills/...`
+    # was a sandbox-bypass channel. Bare-name forms (no path) were also
+    # dropped — they rely on PATH at exec time, which a malicious entry
+    # earlier in PATH can shadow.
+    #
     # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
-    # over PR review threads — read-only, no mutations. Same risk profile as
-    # GH_READ_PATTERNS. Two forms: `bash <path>/fetch-coderabbit-threads.sh ...`
-    # and direct invocation (after normalize_cmd basenames the path).
-    r"^bash\s+\S*\.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads\.sh\b",
-    r"^fetch-coderabbit-threads\.sh\b",
+    # over PR review threads — read-only, no mutations.
+    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads\.sh\b",
     # fetch-failed-pr-checks.sh: wraps `gh pr view --json statusCheckRollup` +
     # `gh run view --log-failed`. Read-only, no mutations.
-    r"^bash\s+\S*\.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks\.sh\b",
-    r"^fetch-failed-pr-checks\.sh\b",
+    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks\.sh\b",
     # reply-to-pr-thread.sh: POSTs a single review-thread reply via
     # `gh api -X POST .../pulls/N/comments/<id>/replies`. Auto-approved per
     # the user's "always allowed" request — mutates GitHub but the blast radius
     # is one comment, easily deleted via `gh`.
-    r"^bash\s+\S*\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
-    r"^reply-to-pr-thread\.sh\b",
+    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
     # echo: harmless producer used to feed stdin into reply-to-pr-thread.sh
     # (and similar safe-pipe-bash patterns). Surviving content has no shell
     # metachars (UNSAFE_META check earlier would have asked first).
@@ -394,10 +397,22 @@ _VALUE_TAKING_FLAGS = {
     "wc": set(),
 }
 
-# Flags on these commands that perform a WRITE — must reject even if the
-# operand looks like a value. `sort -o FILE` writes to FILE.
-_WRITE_FLAGS = {
-    "sort": ("-o", "--output", "-o", "--output="),  # short forms `-oFILE` handled below
+# Flags that turn a "safe stdin consumer" into something dangerous:
+# writes to a file, reads sensitive files, or executes external programs.
+# Each entry maps a command name → a set of exact flag tokens and a set of
+# `--flag=` prefixes to reject. Short attached forms (e.g. `-oFILE`) are
+# handled inline in the rejection loop.
+#
+# Examples that must be rejected:
+#   sort -o FILE                — writes FILE
+#   sort --output=FILE          — writes FILE
+#   sort --files0-from=FILE     — reads FILE (newline/null-separated paths)
+#   sort --compress-program=X   — executes external program X
+_FORBIDDEN_FLAGS = {
+    "sort": {
+        "exact": {"-o", "--output", "--files0-from", "--compress-program"},
+        "prefix": ("--output=", "--files0-from=", "--compress-program="),
+    },
 }
 
 
@@ -421,10 +436,19 @@ def is_safe_pipe_target(part):
     if name in SAFE_PIPE_TARGETS:
         args = argv[1:]
         if name in {"head", "tail", "sort", "wc"}:
-            # Reject explicit write flags up front (e.g. `sort -o FILE`).
-            for a in args:
-                if name in _WRITE_FLAGS:
-                    if a in {"-o", "--output"} or a.startswith("--output=") or (a.startswith("-o") and len(a) > 2):
+            # Reject forbidden flags up front: writes (sort -o FILE),
+            # sensitive reads (sort --files0-from=FILE), program execution
+            # (sort --compress-program=X). Catches both space-separated
+            # and `=`-separated forms, plus short attached `-oFILE`.
+            forbidden = _FORBIDDEN_FLAGS.get(name)
+            if forbidden:
+                for a in args:
+                    if a in forbidden["exact"]:
+                        return False
+                    if any(a.startswith(p) for p in forbidden["prefix"]):
+                        return False
+                    # Short attached form: `-oFILE` (sort writes to FILE).
+                    if a.startswith("-o") and len(a) > 2 and not a.startswith("--"):
                         return False
             # Walk argv: each token must be either a flag, the stdin marker
             # `-`, or the value consumed by the *previous* value-taking flag.

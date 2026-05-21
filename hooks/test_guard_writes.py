@@ -428,6 +428,20 @@ class TestStripSafePipes:
         # `-oFILE` (no space)
         assert strip_safe_pipes("ls | sort -o/tmp/owned") is None
 
+    def test_sort_files0_from_short_rejected(self):
+        # `--files0-from FILE` reads FILE — sensitive-read bypass via pipe.
+        assert strip_safe_pipes("gh pr view 1 | sort --files0-from /etc/passwd") is None
+
+    def test_sort_files0_from_equals_rejected(self):
+        assert strip_safe_pipes("gh pr view 1 | sort --files0-from=/etc/passwd") is None
+
+    def test_sort_compress_program_rejected(self):
+        # `--compress-program PROG` runs PROG — code-execution bypass.
+        assert strip_safe_pipes("gh pr view 1 | sort --compress-program /tmp/evil") is None
+
+    def test_sort_compress_program_equals_rejected(self):
+        assert strip_safe_pipes("gh pr view 1 | sort --compress-program=/tmp/evil") is None
+
     def test_sort_with_value_taking_flag_allowed(self):
         # `sort -k 2 -t :` — both flags take values, no file operands
         assert strip_safe_pipes("ls | sort -k 2 -t :") == "ls"
@@ -1135,44 +1149,76 @@ class TestHookIntegration:
 
 
 class TestSkillScriptsUnsandboxed:
-    """Skill scripts that wrap gh and need sandbox bypass should not prompt."""
+    """Skill scripts that wrap gh and need sandbox bypass should not prompt.
+    Only accepted from home-rooted invocations (`bash ~/.claude/...`,
+    `bash $HOME/.claude/...`, or `bash /home/<user>/.claude/...`). Arbitrary
+    paths and bare-name forms must NOT be auto-approved."""
 
-    # fetch-coderabbit-threads (regression — was already in the allow list)
+    # --- canonical bash forms: allow ---
+
     def test_fetch_coderabbit_threads_bash_form_allows(self):
         assert get_decision("Bash", {
             "command": "bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 70 --repo MotleyAI/slayer",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
 
-    # fetch-failed-pr-checks
     def test_fetch_failed_pr_checks_bash_form_allows(self):
         assert get_decision("Bash", {
             "command": "bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh 70",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
 
-    def test_fetch_failed_pr_checks_direct_form_allows(self):
-        # normalize_cmd basenames the path when invoked directly.
-        assert get_decision("Bash", {
-            "command": "fetch-failed-pr-checks.sh 70 --repo MotleyAI/slayer",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
-
-    # reply-to-pr-thread (mutation, but explicitly auto-approved per user)
     def test_reply_to_pr_thread_bash_form_allows(self):
         assert get_decision("Bash", {
             "command": "bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
 
-    def test_reply_to_pr_thread_direct_form_allows(self):
+    def test_fetch_coderabbit_threads_absolute_home_allows(self):
+        # `/home/<user>/.claude/...` is the resolved form of `~/.claude/...`
         assert get_decision("Bash", {
-            "command": "reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+            "command": "bash /home/james/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 7",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
 
-    # don't accidentally allow unrelated scripts under skills/ — pattern must
-    # be specific to the audited filenames
+    # `$HOME/...` is intentionally NOT in the allowlist regex: the
+    # UNSAFE_META check (line 544) catches `$` as a shell metacharacter and
+    # asks before we ever reach the allowlist. The shell expansion has to
+    # happen earlier — either as `~/...` (no `$`) or a fully resolved
+    # `/home/<user>/...` path.
+
+    # --- spoofed prefixes: must ask ---
+
+    def test_fetch_coderabbit_threads_tmp_prefix_asks(self):
+        # `/tmp/.claude/skills/...` — an attacker-writable prefix. Must NOT
+        # match the home-rooted allowlist; falls through to ask.
+        assert get_decision("Bash", {
+            "command": "bash /tmp/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 7",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_reply_to_pr_thread_tmp_prefix_asks(self):
+        assert get_decision("Bash", {
+            "command": "bash /tmp/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    # --- bare-name direct forms: must ask (PATH could shadow with malicious) ---
+
+    def test_fetch_failed_pr_checks_direct_form_asks(self):
+        assert get_decision("Bash", {
+            "command": "fetch-failed-pr-checks.sh 70 --repo MotleyAI/slayer",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    def test_reply_to_pr_thread_direct_form_asks(self):
+        assert get_decision("Bash", {
+            "command": "reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+            "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    # --- unrelated scripts under skills/ are not auto-approved ---
+
     def test_unknown_skill_script_still_asks(self):
         assert get_decision("Bash", {
             "command": "bash ~/.claude/skills/some-other-script/scripts/foo.sh",

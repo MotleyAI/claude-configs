@@ -16,8 +16,11 @@ Only these commands need keyring/network access outside the sandbox:
   (e.g. `gh pr view`, `gh issue list`, `gh api` GETs, `gh auth status`)
   auto-allow; writes (`gh pr create`, `gh api -X POST`, etc.) prompt.
 - `git fetch` / `git pull` — need the credential keyring.
-- `git push` — needs the credential keyring; the hook additionally asks
-  before each push regardless of sandbox state.
+- `git push` — needs the credential keyring. Plain `git push` auto-approves
+  unsandboxed (also allowlisted in `settings.json`). The dangerous variants
+  — `--force` / `-f` / `--force-with-lease` / `--delete` / `-d` / `--mirror`
+  / `--prune` and the `:branch` (deletion) / `+branch` (force) refspec
+  forms — always ask, regardless of sandbox state.
 
 Never use `WebFetch` for GitHub API calls — use `gh api` with bypass.
 

@@ -13,7 +13,7 @@ configured separately and stay completely independent.
 
 ## Architecture Overview
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  jmux (tmux overlay)                                    │
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐             │
@@ -63,7 +63,7 @@ bash containerized/scripts/fetch-claude-md.sh
 bash containerized/scripts/build-base-image.sh
 # Sanity: prints versions of claude, codex, opencode, uv, python, gh
 
-# 4. Install the agent-task launcher and `at` alias
+# 4. Install the agent-task launcher and `agt` alias
 bash containerized/scripts/install-launcher.sh
 source ~/.bashrc
 ```
@@ -163,11 +163,14 @@ Run once inside each project root. Container Use stores config in
 same baseline.
 
 ```bash
-bash containerized/scripts/setup-project.sh \
-  ~/projects/my-project \
-  ~/projects/repo-b \
-  ~/projects/repo-c
+cd ~/projects/my-project
+bash containerized/scripts/setup-project.sh
 ```
+
+The script is **cwd-driven** with no positional args. It reads the current
+directory: if cwd is itself a git repo it uses that as the primary; otherwise
+it prompts to pick one of the cwd's git sub-folders, and registers the rest
+as extra-repo setup commands (clone + `uv sync` if `uv.lock` is present).
 
 What the script does:
 
@@ -193,7 +196,7 @@ What the script does:
 
 ### What lives where in the container
 
-```
+```text
 /root/.claude/
   settings.json            ← bind-mount from containerized/claude-config/        (ro)
   CLAUDE.md                ← bind-mount from containerized/claude-config/        (ro — hand-edited; @-imports rules below)
@@ -265,11 +268,11 @@ reads from that bind-mounted cache and finishes in ~2s.
 
 ```bash
 # Default agent: claude
-at add-unit-tests "Write unit tests for the auth module, targeting 80% coverage"
+agt add-unit-tests "Write unit tests for the auth module, targeting 80% coverage"
 
 # Pick a specific agent per task
-at --agent codex    refactor-api "Refactor the API client in repo-b to use the retry logic from repo-c"
-at --agent opencode write-migration "Write the database migration for the users table"
+agt --agent codex    refactor-api "Refactor the API client in repo-b to use the retry logic from repo-c"
+agt --agent opencode write-migration "Write the database migration for the users table"
 ```
 
 ### Monitoring

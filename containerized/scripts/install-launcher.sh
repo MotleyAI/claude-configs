@@ -16,8 +16,8 @@ ln -sf "$HERE/setup-project.sh" "$HOME/bin/setup-project"
 if ! grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null; then
   printf '\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
 fi
-if ! grep -q "alias at='agent-task'" "$HOME/.bashrc" 2>/dev/null; then
-  printf "alias at='agent-task'\n" >> "$HOME/.bashrc"
+if ! grep -q "alias agt='agent-task'" "$HOME/.bashrc" 2>/dev/null; then
+  printf "\nalias agt='agent-task'\n" >> "$HOME/.bashrc"
 fi
 
 echo "✓ Linked $HOME/bin/agent-task    -> $HERE/agent-task.sh"

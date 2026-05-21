@@ -9,12 +9,18 @@ known-safe-unsandboxed allowlist. Bypass is meant to be rare and explicit.
 
 Only these commands need keyring/network access outside the sandbox:
 
-- `gh ...` — all `gh` invocations (reads and writes). The hook still
-  separately denies gh writes inside sandbox and asks on bypass for
-  non-allowlisted gh writes.
-- `git fetch` — needs the credential keyring.
-- `git push` — needs the credential keyring; the hook will additionally
-  ask before each push regardless of sandbox state.
+- `gh ...` (any subcommand) — always needs bypass. The hook denies *every*
+  sandboxed `gh` call with a "needs unsandboxed" message (the keyring lives
+  outside the sandbox), so trying `gh pr view` inside the sandbox just
+  costs a round-trip. Once bypassed, `gh` reads matching `GH_READ_PATTERNS`
+  (e.g. `gh pr view`, `gh issue list`, `gh api` GETs, `gh auth status`)
+  auto-allow; writes (`gh pr create`, `gh api -X POST`, etc.) prompt.
+- `git fetch` / `git pull` — need the credential keyring.
+- `git push` — needs the credential keyring. Plain `git push` auto-approves
+  unsandboxed (also allowlisted in `settings.json`). The dangerous variants
+  — `--force` / `-f` / `--force-with-lease` / `--delete` / `-d` / `--mirror`
+  / `--prune` and the `:branch` (deletion) / `+branch` (force) refspec
+  forms — always ask, regardless of sandbox state.
 
 Never use `WebFetch` for GitHub API calls — use `gh api` with bypass.
 

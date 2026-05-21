@@ -70,10 +70,18 @@ ASK_ALWAYS_PATTERNS = [
     r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s-f\b",
     # git push --delete / -d  (deletes a remote ref)
     r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s(?:--delete|-d)\b",
-    # git push origin :branch  (deletion via empty-source refspec)
-    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b\s+\S+\s+:\S",
-    # git push origin +branch  (force-push refspec)
-    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b\s+\S+\s+\+\S",
+    # git push --mirror (force-updates all refs and deletes remote refs not
+    # present locally — same blast radius as --force + --delete combined)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s--mirror\b",
+    # git push --prune (deletes remote refs without a local counterpart)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b.*\s--prune\b",
+    # git push <remote> [<ref> ...] :branch  (deletion via empty-source
+    # refspec — token must START with `:`, so this doesn't catch the normal
+    # `src:dst` refspec form where the colon is mid-token)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b(?:\s+\S+)*\s+:\S",
+    # git push <remote> [<ref> ...] +branch  (force-push refspec — same
+    # multi-arg shape as the deletion form)
+    r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b(?:\s+\S+)*\s+\+\S",
     # docker — always ask
     r"^docker\b",
 ]
@@ -406,12 +414,33 @@ def is_safe_pipe_target(part):
             return True
         if name == "grep":
             # `grep [flags] PATTERN` reads stdin; `grep [flags] PATTERN FILE`
-            # reads FILE. Allow at most one non-flag arg (the PATTERN).
-            # grep's value-taking flags (-e, -f, --regexp=, --file=) make
-            # the pattern explicit, but the conservative count-non-flags
-            # rule is good enough — file operands push the count >1.
-            non_flags = [a for a in args if not a.startswith("-") and a != "-"]
-            return len(non_flags) <= 1
+            # reads FILE. Reject `-f FILE` / `--file=FILE` outright — those
+            # read patterns from FILE, which is a sensitive-file-read bypass
+            # disguised as a pattern source. `-e PATTERN` is fine: the value
+            # is the pattern, not a path. Walk argv so `-e PATTERN` doesn't
+            # push the non-flag count past 1.
+            i = 0
+            non_flag_count = 0
+            while i < len(args):
+                a = args[i]
+                if a == "-":
+                    i += 1
+                    continue
+                if a == "-f" or a == "--file" or a.startswith("--file="):
+                    return False
+                if a in {"-e", "-f", "--regexp", "--file"} and "=" not in a:
+                    # Value-taking flag with the value as the next token —
+                    # consume both. (`-f`/`--file` already returned False above.)
+                    i += 2
+                    continue
+                if a.startswith("-"):
+                    i += 1
+                    continue
+                non_flag_count += 1
+                if non_flag_count > 1:
+                    return False
+                i += 1
+            return True
         # Should not reach here — every name in SAFE_PIPE_TARGETS is handled
         # above. Defensive return.
         return False

@@ -17,7 +17,7 @@ if ! grep -q 'export PATH="$HOME/bin:$PATH"' "$HOME/.bashrc" 2>/dev/null; then
   printf '\nexport PATH="$HOME/bin:$PATH"\n' >> "$HOME/.bashrc"
 fi
 if ! grep -q "alias agt='agent-task'" "$HOME/.bashrc" 2>/dev/null; then
-  printf "alias agt='agent-task'\n" >> "$HOME/.bashrc"
+  printf "\nalias agt='agent-task'\n" >> "$HOME/.bashrc"
 fi
 
 echo "✓ Linked $HOME/bin/agent-task    -> $HERE/agent-task.sh"

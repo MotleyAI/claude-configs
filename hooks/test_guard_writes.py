@@ -363,6 +363,23 @@ class TestStripSafePipes:
         # `grep -c` (count, no pattern) — degenerate but harmless on stdin
         assert strip_safe_pipes("ls | grep -c .") == "ls"
 
+    def test_grep_file_short_flag_rejected(self):
+        # `grep -f FILE` reads patterns FROM FILE — a sensitive-file-read
+        # bypass disguised as a pattern source.
+        assert strip_safe_pipes("gh pr view 4 | grep -f /etc/passwd") is None
+
+    def test_grep_file_long_flag_rejected(self):
+        assert strip_safe_pipes("gh pr view 4 | grep --file=/etc/passwd") is None
+
+    def test_grep_file_long_flag_separate_value_rejected(self):
+        assert strip_safe_pipes("gh pr view 4 | grep --file /etc/passwd") is None
+
+    def test_grep_dash_e_with_two_patterns_allowed(self):
+        # `grep -e PATTERN -e PATTERN2` — each -e consumes its next token as
+        # a pattern, not a file. The pre-fix simple count incorrectly rejected
+        # this; walking argv with -e as value-taking allows it through.
+        assert strip_safe_pipes("git log | grep -e fix -e bug") == "git log"
+
     def test_sort_output_flag_rejected(self):
         # `sort -o FILE` writes FILE — must not auto-strip
         assert strip_safe_pipes("ls | sort -o /tmp/owned") is None
@@ -550,8 +567,30 @@ class TestAskAlwaysPatterns:
     def test_git_push_deletion_refspec(self):
         assert self._matches_dangerous("git push origin :egor/foo")
 
+    def test_git_push_deletion_refspec_with_extra_ref(self):
+        # Multi-arg form: `push <remote> <ref> :<deleted>` slipped through the
+        # old pattern because it required exactly one token before `:branch`.
+        assert self._matches_dangerous("git push origin main :old-branch")
+
     def test_git_push_force_refspec(self):
         assert self._matches_dangerous("git push origin +egor/foo")
+
+    def test_git_push_force_refspec_with_extra_ref(self):
+        assert self._matches_dangerous("git push origin main +bad-branch")
+
+    def test_git_push_normal_refspec_not_dangerous(self):
+        # `src:dst` refspec is the normal push form — colon is mid-token, not
+        # at the start, so it must NOT match the deletion pattern.
+        assert not self._matches_dangerous("git push origin master:main")
+
+    def test_git_push_mirror(self):
+        # --mirror force-updates all refs and deletes remote refs not present
+        # locally — same blast radius as --force + --delete combined.
+        assert self._matches_dangerous("git push --mirror origin")
+
+    def test_git_push_prune(self):
+        # --prune deletes remote refs without a local counterpart.
+        assert self._matches_dangerous("git push --prune origin refs/heads/*:refs/heads/*")
 
     def test_git_status_not_dangerous(self):
         assert not self._matches_dangerous("git status")

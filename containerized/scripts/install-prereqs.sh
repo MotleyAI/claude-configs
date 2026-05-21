@@ -29,7 +29,7 @@ for arg in "$@"; do
 done
 
 say() { printf "\n→ %s\n" "$*"; }
-have() { command -v "$1" >/dev/null 2>&1; }
+have() { command -v "$1" >/dev/null 2>&1; } # NOSONAR(S7679) — short one-line helper; assigning $1 to a local var adds noise without clarity
 
 if ! have docker; then
   say "Installing Docker (sudo)"

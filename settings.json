@@ -18,7 +18,10 @@
 			"Bash(bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
 			"Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)"
 		],
-		"deny": []
+		"deny": [
+			"Read(./.env)",
+			"Read(./.env.*)"
+		]
 	},
 	"hooks": {
 		"PermissionRequest": [

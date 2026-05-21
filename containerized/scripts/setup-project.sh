@@ -50,7 +50,7 @@ fi
 WORKSPACE="$(pwd)"
 EXTRA_REPOS=()
 
-is_git_repo() { [[ -d "$1/.git" ]] || git -C "$1" rev-parse --git-dir >/dev/null 2>&1; }
+is_git_repo() { [[ -d "$1/.git" ]] || git -C "$1" rev-parse --git-dir >/dev/null 2>&1; } # NOSONAR(S7679) — short one-line helper; assigning $1 to a local var adds noise without clarity
 
 if is_git_repo "$WORKSPACE"; then
   PRIMARY="$WORKSPACE"
@@ -132,6 +132,12 @@ for repo in "${EXTRA_REPOS[@]}"; do
     echo "       refusing to interpolate it into a shell command" >&2
     exit 1
   fi
+  # Without this bind-mount, the `git clone --local /host-repos/$name ...`
+  # setup command below would fail because /host-repos doesn't exist inside
+  # the container. Mounted read-only — clones use --local which copies the
+  # working tree; container-side writes go to /workspace/$name.
+  echo "→ Adding bind-mount: $repo → /host-repos/$name (ro)"
+  container-use config volume add "$repo:/host-repos/$name:ro"
   echo "→ Adding setup command: clone $name"
   container-use config setup add "git clone --local /host-repos/$name /workspace/$name"
   if [[ -f "$repo/uv.lock" ]]; then

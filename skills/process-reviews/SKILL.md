@@ -47,89 +47,29 @@ A check is **non-terminal** if it's:
 
 Anything else (`SUCCESS` / `FAILURE` / `ERROR` / `COMPLETED`) counts as terminal — even a failed check is "done". Checks that are *missing entirely* from the rollup (e.g. CodeRabbit not installed on the repo) do not block — only checks that exist AND are non-terminal do.
 
-#### 0a. Wait for the status-check rollup
+#### 0a + 0b. Wait for status checks + CodeRabbit settle
 
-Run this loop. Bail with a non-zero exit (skill aborts, no fetch, no plan) if the gate doesn't clear within 30 minutes:
+Run the `wait-for-reviews` script — it bundles the status-check rollup gate (Stage 0a) AND the CodeRabbit summary-comment settle (Stage 0b) into a single auto-approved invocation. No inline bash.
 
 ```bash
-PR=<pr-number>
-REPO=<owner/repo>
-START=$(date +%s)
-TIMEOUT=$((30 * 60))
-
-while :; do
-  pending=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup --jq '
-    [.statusCheckRollup[]
-     | select(
-         (.__typename == "StatusContext"
-            and (.state == "PENDING" or .state == "EXPECTED"))
-         or ((.__typename == "CheckRun" or .__typename == "WorkflowRun")
-            and (.status == "QUEUED" or .status == "IN_PROGRESS"
-              or .status == "WAITING" or .status == "REQUESTED"
-              or .status == "PENDING"))
-       )
-     | (.name // .context)] | join(", ")')
-
-  if [[ -z "$pending" ]]; then
-    break
-  fi
-
-  elapsed=$(( $(date +%s) - START ))
-  echo "Waiting on: $pending (elapsed $((elapsed/60))m). Sleeping 1m."
-
-  if (( elapsed >= TIMEOUT )); then
-    echo "Gate timed out after 30 min. Still pending: $pending. Aborting."
-    exit 1
-  fi
-
-  sleep 60
-done
+bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh <PR>
 ```
 
-#### 0b. Settle for CodeRabbit's review delivery
+The script exits 0 when both stages clear (or when CodeRabbit isn't installed on the repo), exit 1 if the status-check gate doesn't clear within 30 minutes. Stage 0b (CodeRabbit settle) is best-effort with a 10-minute cap — the script reports "proceeding anyway" on the cap and still exits 0, matching the prior inline behaviour.
+
+A check is **non-terminal** if it's:
+- a `StatusContext` with `state` ∈ {`PENDING`, `EXPECTED`} — CodeRabbit reports this way, OR
+- a `CheckRun` or `WorkflowRun` with `status` ∈ {`QUEUED`, `IN_PROGRESS`, `WAITING`, `REQUESTED`, `PENDING`} — Sonar and GitHub Actions jobs report this way.
+
+Anything else (`SUCCESS` / `FAILURE` / `ERROR` / `COMPLETED`) counts as terminal — even a failed check is "done". Checks that are *missing entirely* from the rollup (e.g. CodeRabbit not installed on the repo) do not block — only checks that exist AND are non-terminal do.
+
+Why the CodeRabbit settle is needed even after the status check flips to SUCCESS:
 
 The `statusCheckRollup` only covers the CodeRabbit *status check* — the bot's `StatusContext` flips to `SUCCESS` when it finishes analysing, but the actual review content (top-level summary + line-level threads) is delivered on separate GitHub timelines that can lag the status flip by 1–5 minutes. If you fetch threads in that window you get an empty (or partial) view and incorrectly declare the PR clean.
 
 The authoritative signal is the **top-level summary comment** that CodeRabbit maintains on the PR: it's posted by `coderabbitai[bot]` on the issue-comments endpoint, contains the `summarize by coderabbit.ai` HTML marker, and CodeRabbit **updates the same comment** for every push (it does not create a new one). The summary comment's `updated_at` reliably advances past the push, and line-level review threads are visible by then.
 
 Do **not** rely on `Review.submittedAt`: CodeRabbit typically submits one `PullRequestReview` per PR — the first one — and pushes thereafter only update the summary comment and (when applicable) the line-level review threads. `Review.submittedAt` is therefore stuck on the original review and never advances past subsequent HEADs.
-
-After Step 0a clears, wait for the CodeRabbit summary comment's `updated_at` to be newer than the PR's HEAD `committedDate`. Skip this if no CodeRabbit `StatusContext` ever appeared in the rollup (CodeRabbit isn't installed on this repo). Cap at 10 minutes.
-
-```bash
-CR_SETTLE=$((10 * 60))
-
-has_coderabbit=$(gh pr view "$PR" --repo "$REPO" --json statusCheckRollup --jq '
-  any(.statusCheckRollup[];
-      (.__typename == "StatusContext")
-      and ((.context // .name // "") | ascii_downcase | test("coderabbit")))')
-
-if [[ "$has_coderabbit" == "true" ]]; then
-  head_oid=$(gh pr view "$PR" --repo "$REPO" --json headRefOid --jq '.headRefOid')
-  head_committed=$(gh api "repos/$REPO/commits/$head_oid" \
-    --jq '.commit.committer.date')
-  CR_START=$(date +%s)
-  while :; do
-    # Latest update of any coderabbitai[bot] top-level issue comment. The
-    # bot reuses the same summary comment across pushes — checking
-    # ``updated_at`` (not ``created_at``) catches subsequent reviews.
-    cr_updated=$(gh api "repos/$REPO/issues/$PR/comments" --jq '
-      [.[] | select(.user.login | test("coderabbitai"; "i")) | .updated_at]
-      | sort | last // ""')
-    if [[ -n "$cr_updated" && "$cr_updated" > "$head_committed" ]]; then
-      echo "CodeRabbit summary updated ($cr_updated) — review delivered."
-      break
-    fi
-    elapsed=$(( $(date +%s) - CR_START ))
-    if (( elapsed >= CR_SETTLE )); then
-      echo "CodeRabbit settle hit 10m cap — proceeding without a fresh review."
-      break
-    fi
-    echo "Waiting for CodeRabbit summary > head ($head_committed). Sleeping 30s."
-    sleep 30
-  done
-fi
-```
 
 Why summary `updated_at` and not other signals:
 
@@ -138,15 +78,15 @@ Why summary `updated_at` and not other signals:
 - **Line-level review comments (`pulls/N/comments`)**: only exist when there are findings; on a clean PR they never appear, so polling them would always hit the 10-minute cap.
 - **Summary `updated_at`**: advances on every CodeRabbit pass (whether it found anything or not), is monotonic with respect to HEAD, and is set after the bot has finished posting line-level threads (the summary is the last thing the bot writes).
 
-Once both 0a and 0b have cleared, proceed to Step 1.
+Once the script exits, proceed to Step 1.
 
 ### 1. Fetch all unresolved feedback (in parallel)
 
 - **Codex** — already returned from Step 0's parallel call. Parse the response into findings: one entry per flagged file:line, with severity from the model's own classification. If the response was "No findings." treat the channel as empty.
-- **CodeRabbit** — invoke the `fetch-coderabbit-threads` skill (script: `~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh <PR>`). Read the JSON file it writes (`JSON: <path>` last line of stdout) — that's the structured input for the rest of this skill.
-- **SonarQube — check EVERY gate criterion, not just issues.** The SonarCloud quality gate can fail on issues, duplications, coverage, security hotspots, or other metrics independently. Fetch all of them so the plan is not missing the actual cause of a red gate. **Mandatory calls** (all MCP, never the CLI / `sonarqube:sonar-*` skills / `gh api`):
-  - `mcp__sonarqube__get_project_quality_gate_status(projectKey=..., pullRequest="<PR>")` — the headline pass/fail and the individual gate conditions (which metric tripped, threshold vs actual). Treat any non-OK condition as something to address even if no Sonar issue is filed against it.
-  - `mcp__sonarqube__search_sonar_issues_in_projects(projects=["<key>"], pullRequestId="<PR>", issueStatuses=["OPEN","CONFIRMED"])` — bugs, vulnerabilities, code smells.
+- **CodeRabbit** — invoke the `fetch-coderabbit-threads` skill (script: `~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh <PR>`). Read the JSON file it writes (`JSON: <path>` last line of stdout) — that's the structured input for the rest of this skill. **Read the comment BODIES from the rendered Markdown the script prints to stdout** (capture full stdout, not `tail`), and use the JSON only for the structured fields you need to act (per-thread `path` / `line` / `id` / `isResolved`, and the per-comment `url` for replies). In the JSON, `threads[]` carries `{id, isResolved, isOutdated, path, line, originalLine, comments}` where **`comments` is a GraphQL connection OBJECT, not a flat list** — the bodies live at `threads[].comments.nodes[].body` (each node also has `author.login`, `url`, `createdAt`). Iterating `comments` directly walks the object's keys (`pageInfo`, `nodes`), not the comments — a common parsing mistake. The review-summary `nitpicks[]` and `outside_diff[]` arrays instead carry a pre-rendered `block` string.
+- **SonarQube — check EVERY gate criterion AND the new-issues count, not just the gate verdict.** The SonarCloud quality gate can fail on issues, duplications, coverage, security hotspots, or other metrics independently. Crucially, **the gate's `conditions` list does NOT include a "new issues count" condition by default** — a gate can return `status: OK` while still introducing OPEN issues attributed to this PR. The SonarCloud GitHub bot comment shows the headline `N New issues` right under "Quality Gate passed/failed"; that count is the authoritative signal for PR-attributed issues, and it must reconcile with the issue search below. Fetch all of the following so the plan is not missing the actual cause of a red gate OR a silently-introduced new issue. **Mandatory calls** (all MCP, never the CLI / `sonarqube:sonar-*` skills / `gh api`):
+  - `mcp__sonarqube__get_project_quality_gate_status(projectKey=..., pullRequest="<PR>")` — the headline pass/fail and the individual gate conditions (which metric tripped, threshold vs actual). Treat any non-OK condition as something to address even if no Sonar issue is filed against it. Remember: gate `OK` does NOT mean "no new issues" — verify against the issue search.
+  - `mcp__sonarqube__search_sonar_issues_in_projects(projects=["<key>"], pullRequestId="<PR>", issueStatuses=["OPEN","CONFIRMED"])` — bugs, vulnerabilities, code smells. **The API can return CLOSED/FIXED issues alongside the requested statuses** (the `issueStatuses` filter is not strictly enforced when `pullRequestId` is set — Sonar returns the historical issue set for the PR including ones already closed by prior commits or by the retarget). After fetching, **filter client-side to `status in ("OPEN", "CONFIRMED")`** before triage. The remaining count MUST match the "N New issues" headline from the bot comment — if it doesn't, re-query or investigate before declaring done. **Never dismiss an OPEN issue under `pullRequestId=...` as "pre-existing" just because it appears alongside CLOSED entries from prior commits or parent branches** — under PR scope, OPEN means the issue is attributed to this PR's current HEAD.
   - `mcp__sonarqube__search_security_hotspots(projectKey=..., pullRequest="<PR>", status=["TO_REVIEW"])` — hotspots are NOT issues; they have a separate review workflow and are easy to miss.
   - For each duplication-related gate condition (`new_duplicated_lines_density` etc.) or whenever the quality gate cites duplication: `mcp__sonarqube__search_duplicated_files(projectKey=..., pullRequest="<PR>")` and then `mcp__sonarqube__get_duplications(componentKey=..., pullRequest="<PR>")` on the specific file(s). Duplications never surface as Sonar issues — they show up only via these tools and the gate.
   - For each coverage-related gate condition (`new_coverage`, `new_lines_to_cover` etc.): `mcp__sonarqube__search_files_by_coverage(projectKey=..., pullRequest="<PR>", ...)` to find under-covered files, then `mcp__sonarqube__get_file_coverage_details(componentKey=..., pullRequest="<PR>")` for the specific uncovered lines.
@@ -193,15 +133,16 @@ For each entry, write a one-line classification rationale (`why-valid` or `why-i
 
 #### CodeRabbit (invalid)
 
-**Never** call the resolve mutation. Post a reply on the thread tagging `@coderabbitai` with the rationale, using the `reply-to-pr-thread` skill (auto-approved):
+**Never** call the resolve mutation. Post a reply on the thread tagging `@coderabbitai` with the rationale, using this skill's `reply-invalid-coderabbit.sh` script (auto-approved). The script auto-prepends `@coderabbitai ` if the body doesn't already start with that mention, and delegates URL parsing + the gh call to `reply-to-pr-thread`:
 
 ```bash
-echo "@coderabbitai <one or two sentences explaining why this is invalid / where it was already addressed>" | \
-  bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh \
+cat <<'EOF' | bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh \
     <discussion-url-from-fetch-coderabbit-threads-output>
+<one or two sentences explaining why this is invalid / where it was already addressed>
+EOF
 ```
 
-Reference the relevant `CLAUDE.md` rule or commit hash when possible — gives the bot and the human reviewer something concrete to evaluate against. Do NOT call `gh api .../replies` directly; the skill is the only allowed channel.
+Reference the relevant `CLAUDE.md` rule or commit hash when possible — gives the bot and the human reviewer something concrete to evaluate against. Do NOT call `gh api .../replies` directly; the script is the only allowed channel. (You may still call `reply-to-pr-thread.sh` directly for non-CodeRabbit threads — e.g. replying to a human reviewer — where the `@coderabbitai` prefix would be wrong.)
 
 #### SonarQube (invalid)
 
@@ -232,6 +173,34 @@ Examples:
 Place the comment at the end of the offending line. For multi-line issues (e.g. cognitive complexity on a function), put the suppression on the line Sonar cites.
 
 (CodeRabbit invalid replies stay in step 4 — they're comments, not code changes.)
+
+#### SonarQube security hotspots
+
+Hotspots are **not** issues — `NOSONAR` does **not** clear them. The gate
+condition `new_security_hotspots_reviewed` requires every new hotspot to be
+**reviewed** (100%), so a red gate on this metric is only cleared two ways:
+
+1. **Rewrite the flagged code so no hotspot is raised.** Verify the rewrite
+   actually removes it on the next analysis — a plausible-looking change can
+   still trip the rule. In particular, `python:S5852` (ReDoS) flags a regex with
+   **two or more unbounded quantifiers** that can backtrack; switching `.*` to a
+   bounded class like `[^"]*` does **NOT** help if two such segments remain
+   (`[^"]*X[^"]*Y` is still flagged). Reduce to a **single** quantified segment
+   (`PREFIX[^"]*X`) and assert any tail with a plain substring check.
+2. **Mark it REVIEWED via `mcp__sonarqube__change_security_hotspot_status`**
+   (`status=["REVIEWED"]`, `resolution=["SAFE"|"FIXED"|"ACKNOWLEDGED"]`, with a
+   justification `comment`) when the hotspot is a genuine false positive (e.g. a
+   test-only regex over deterministic, non-attacker-controlled input). This is a
+   Sonar-state mutation — list it in the plan and get the user's go-ahead before
+   applying. **Order matters:** PR re-analysis assigns *new* hotspot keys each
+   run, so mark REVIEWED only **after** the final code push has been analysed,
+   then re-query `get_project_quality_gate_status` to confirm the metric flipped
+   to OK. (Marking on an earlier analysis's keys does not carry over.)
+
+Prefer (1) — it leaves no Sonar-state debt and shows the resolution in the diff.
+
+Since the skill stops at the plan, do not rewrite or mark-reviewed in step 4 —
+list each hotspot in the plan (step 5) with the chosen resolution.
 
 #### Codex (invalid)
 

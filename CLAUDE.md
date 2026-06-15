@@ -38,6 +38,9 @@ If you create any source code or test files, MAKE SURE to add any newly created 
 NEVER ask me to find out things that you can find out yourself eg by running bash scripts - instead, run these scripts!
 Except for when sudo is required - in those cases, give the commands for me to run
 
+I NEVER want to hear "here is a bug/test fail, but it's pre-existing so I'll ignore it". If it's a real bug, or if a test fails,
+and fixing it doesn't require a major refactor (ask me if in doubt about what counts as major), JUST FIX IT.
+
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
 To fetch unresolved CodeRabbit review threads on a GitHub PR, ALWAYS use the

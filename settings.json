@@ -1,171 +1,233 @@
 {
-	"permissions": {
-		"allow": [
-			"Bash(gh:*)",
-			"Bash(echo:*)",
-			"Bash(tail:*)",
-			"Bash(head:*)",
-			"Bash(grep:*)",
-			"Bash(wc:*)",
-			"Bash(sort:*)",
-			"Bash(git push:*)",
-			"Bash(git pull:*)",
-			"Bash(git merge:*)",
-			"Bash(bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
-			"Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
-			"Bash(bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
-			"Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
-			"Bash(bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
-			"Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)"
-		],
-		"deny": [
-			"Read(./.env)",
-			"Read(./.env.*)"
-		]
-	},
-	"hooks": {
-		"PermissionRequest": [
-			{
-				"hooks": [
-					{
-						"command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true",
-						"type":    "command"
-					}
-				],
-				"matcher": "*"
-			}
-		],
-		"PostToolUse": [
-			{
-				"hooks": [
-					{
-						"command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true",
-						"type":    "command"
-					}
-				],
-				"matcher": "*"
-			}
-		],
-		"PostToolUseFailure": [
-			{
-				"hooks": [
-					{
-						"command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true",
-						"type":    "command"
-					}
-				],
-				"matcher": "*"
-			}
-		],
-		"PreToolUse": [
-			{
-				"hooks": [
-					{
-						"command": "python3 ~/.claude/hooks/guard_writes.py",
-						"type":    "command"
-					}
-				],
-				"matcher": "*"
-			},
-			{
-				"hooks": [
-					{
-						"command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh",
-						"timeout": 60,
-						"type":    "command"
-					}
-				],
-				"matcher": "Read"
-			}
-		],
-		"Stop": [
-			{
-				"hooks": [
-					{
-						"command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true",
-						"type":    "command"
-					}
-				]
-			}
-		],
-		"UserPromptSubmit": [
-			{
-				"hooks": [
-					{
-						"command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/prompt-secrets.sh",
-						"timeout": 60,
-						"type":    "command"
-					}
-				],
-				"matcher": "*"
-			},
-			{
-				"hooks": [
-					{
-						"command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true",
-						"type":    "command"
-					}
-				]
-			}
-		]
-	},
-	"enabledPlugins": {
-		"code-simplifier@claude-plugins-official":         true,
-		"cowork-plugin-management@knowledge-work-plugins": true,
-		"gitkraken-hooks@gitkraken":                       true,
-		"motley-local@My Uploads":                         false,
-		"motley-staging@My Uploads":                       false,
-		"motley@My Uploads":                               false,
-		"motley@agent-skills":                             false,
-		"pyright-lsp@claude-plugins-official":             true,
-		"sonarqube@claude-plugins-official":               true,
-		"typescript-lsp@claude-plugins-official":          true
-	},
-	"sandbox": {
-		"enabled": true,
-		"network": {
-			"allowedDomains": [
-				"api.anthropic.com",
-				"github.com",
-				"api.github.com",
-				"raw.githubusercontent.com",
-				"objects.githubusercontent.com",
-				"*.npmjs.org",
-				"registry.yarnpkg.com",
-				"pypi.org",
-				"*.pypi.org",
-				"files.pythonhosted.org",
-				"huggingface.co",
-				"*.huggingface.co",
-				"api.cerebras.ai"
-			],
-			"deniedDomains": [
-				"fishtownanalytics.sinter-collect.com"
-			]
-		},
-		"filesystem": {
-			"allowWrite": [
-				".",
-				"~/.cache/uv",
-				"~/.local/share/slayer"
-			],
-			"denyRead": [
-				"~/.ssh",
-				"~/.aws",
-				"~/.gnupg"
-			]
-		}
-	},
-	"alwaysThinkingEnabled":    true,
-	"effortLevel":              "xhigh",
-	"autoUpdatesChannel":       "stable",
-	"skipAutoPermissionPrompt": true,
-	"extraKnownMarketplaces": {
-		"gitkraken": {
-			"source": {
-				"path":   "/home/james/.claude/plugins/marketplaces/gitkraken",
-				"source": "directory"
-			}
-		}
-	}
+  "permissions": {
+    "allow": [
+      "Agent(*)",
+      "Bash(gh:*)",
+      "Bash(echo:*)",
+      "Bash(tail:*)",
+      "Bash(head:*)",
+      "Bash(grep:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push:*)",
+      "Bash(git pull:*)",
+      "Bash(git merge:*)",
+      "Bash(git checkout:*)",
+      "Bash(git commit:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git merge-base:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git show:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git branch:*)",
+      "Bash(git config --get:*)",
+      "Bash(bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
+      "Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
+      "Bash(bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
+      "Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
+      "Bash(bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
+      "Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
+      "Bash(bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
+      "Bash(~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
+      "Bash(bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
+      "Bash(~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
+      "Bash(cat <<*reply-invalid-coderabbit.sh*)",
+      "Bash(*| bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh*)",
+      "Bash(*| bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh*)",
+      "Bash(env -u SSH_AUTH_SOCK uv run python:*)",
+      "Bash(env -u SSH_AUTH_SOCK git push:*)",
+      "Bash(env -u SSH_AUTH_SOCK git pull:*)",
+      "Bash(env -u SSH_AUTH_SOCK git fetch:*)",
+      "Bash(env -u SSH_AUTH_SOCK git merge:*)",
+      "Bash(env -u SSH_AUTH_SOCK uv run bird-interact-cloud list:*)",
+      "Bash(env -u SSH_AUTH_SOCK uv run bird-interact-cloud fetch:*)",
+      "Bash(uv run bird-interact-cloud list:*)",
+      "Bash(uv run bird-interact-cloud fetch:*)",
+      "Bash(bash scripts/check_annotation_runs.sh:*)",
+      "Bash(bash */scripts/check_annotation_runs.sh:*)",
+      "Bash(bash /home/james/Dropbox/SLayer/bird-agents/scripts/check_annotation_runs.sh:*)",
+      "Bash(bash scripts/wait_and_fetch.sh:*)",
+      "Bash(scripts/wait_and_fetch.sh:*)",
+      "Bash(bash /home/james/Dropbox/SLayer/bird-agents/scripts/wait_and_fetch.sh:*)",
+      "Bash(/home/james/Dropbox/SLayer/bird-agents/scripts/wait_and_fetch.sh:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  },
+  "model": "opus[1m]",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/guard_writes.py"
+          }
+        ]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/prompt-secrets.sh",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "code-simplifier@claude-plugins-official": true,
+    "cowork-plugin-management@knowledge-work-plugins": true,
+    "gitkraken-hooks@gitkraken": true,
+    "motley-local@My Uploads": false,
+    "motley-staging@My Uploads": false,
+    "motley@My Uploads": false,
+    "motley@agent-skills": false,
+    "pyright-lsp@claude-plugins-official": true,
+    "sonarqube@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
+  },
+  "extraKnownMarketplaces": {
+    "gitkraken": {
+      "source": {
+        "source": "directory",
+        "path": "/home/james/.claude/plugins/marketplaces/gitkraken"
+      }
+    }
+  },
+  "sandbox": {
+    "enabled": true,
+    "network": {
+      "allowedDomains": [
+        "api.anthropic.com",
+        "github.com",
+        "api.github.com",
+        "raw.githubusercontent.com",
+        "objects.githubusercontent.com",
+        "*.npmjs.org",
+        "registry.yarnpkg.com",
+        "pypi.org",
+        "*.pypi.org",
+        "files.pythonhosted.org",
+        "huggingface.co",
+        "*.huggingface.co",
+        "api.cerebras.ai",
+        "storage.googleapis.com",
+        "*.googleapis.com"
+      ],
+      "deniedDomains": [
+        "fishtownanalytics.sinter-collect.com",
+        "*.datadoghq.com"
+      ]
+    },
+    "filesystem": {
+      "allowWrite": [
+        ".",
+        "~/.cache/uv",
+        "~/.cache/pypoetry",
+        "~/.local/share/slayer",
+        "~/Dropbox/SLayer/mini-interact",
+        "~/Dropbox/SLayer/bird-agents"
+      ],
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.gnupg"
+      ]
+    },
+    "excludedCommands": [
+      "bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh",
+      "bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh",
+      "gh pr list",
+      "env -u SSH_AUTH_SOCK uv run python",
+      "env -u SSH_AUTH_SOCK git push",
+      "env -u SSH_AUTH_SOCK git pull",
+      "env -u SSH_AUTH_SOCK git fetch",
+      "env -u SSH_AUTH_SOCK git merge",
+      "env -u SSH_AUTH_SOCK uv run bird-interact-cloud fetch",
+      "env -u SSH_AUTH_SOCK uv run bird-interact-cloud list",
+      "uv run bird-interact-cloud fetch",
+      "uv run bird-interact-cloud list",
+      "bash scripts/check_annotation_runs.sh",
+      "bash */scripts/check_annotation_runs.sh",
+      "bash /home/james/Dropbox/SLayer/bird-agents/scripts/check_annotation_runs.sh"
+    ]
+  },
+  "alwaysThinkingEnabled": true,
+  "effortLevel": "xhigh",
+  "autoUpdatesChannel": "stable",
+  "theme": "dark"
 }

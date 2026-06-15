@@ -7,6 +7,8 @@ Before declaring victory, CHECK that the file actually exists in the destination
 
 Here's the info on the receipt to download: $ARGUMENTS
 
+IMPORTANT: If the vendor is not listed below, find the correct billing URL by navigating the site, then after successfully downloading the receipt, add the vendor's URL and steps to this skill file (/home/james/.claude/commands/expenses.md).
+
 Use the following source-specific instructions:
 # Slack
 https://motley-ai.slack.com/admin/billing/history
@@ -31,6 +33,23 @@ https://cloud.cerebras.ai/
 Sign in, then if billing access is restricted on the default org, click "Switch to Motley AI" (or whichever org has Billing Active).
 Navigate to Billing > Payment. Under "Invoice history", find the row matching the charge date/amount and click View.
 The Invoice Details dialog has a "Download PDF" link pointing at pay.stripe.com/invoice/.../pdf — fetch that URL with curl.
+
+# Meetup (meetup.com)
+https://www.meetup.com/payments/meetup_plus_payments_made/
+Click the "Meetup+ receipts" tab. Find the matching row and click the download icon.
+This opens an HTML invoice on S3 (invoicestaxamo.s3.amazonaws.com). Convert to PDF with:
+  google-chrome --headless --disable-gpu --print-to-pdf="<dest>.pdf" --no-sandbox "<s3-url>"
+(Must run with dangerouslyDisableSandbox: true)
+
+# SonarSource / SonarCloud (sonarsource.com)
+https://sonarcloud.io/organizations/motleyai/billing
+Click "Edit in customer portal" — this opens a Stripe billing portal at billing.sonarsource.com.
+Find the invoice row matching the date/amount and click it to open the Stripe invoice page.
+On the Stripe invoice page, click "Download receipt".
+
+# GitKraken
+https://gitkraken.dev/subscription
+Click "View billing history", then click "Download" on the relevant invoice row.
 
 # Google GSuite and similar
 https://admin.google.com/

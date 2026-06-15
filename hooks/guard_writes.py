@@ -114,6 +114,16 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
     # git merge: local-only, can trigger signing/hooks that need keyring access
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
+    # Read-only git introspection — needed inside worktrees because the
+    # worktree's `.git` file is in the sandbox's denyWithinAllow list, so
+    # commands that touch it (even sandboxed) fail and must retry bypassed.
+    # All of these only read git's object DB / index / refs; none push or
+    # mutate anything remote.
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(?:status|diff|log|show|merge-base|rev-parse|ls-files|branch)\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+config\s+--get\b",
+    # git add / rm — local staging only, no remote, fully reversible
+    # (the .git index lives in the worktree's gitdir which the sandbox denies).
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(?:add|rm)\b",
     # Read-only `git remote` subcommands: just reads .git/config, no network.
     # Safe even unsandboxed.
     # Allowed: `remote` (list), `remote -v`, `remote get-url <name>`
@@ -144,6 +154,9 @@ SAFE_UNSANDBOXED_PATTERNS = [
     # the user's "always allowed" request — mutates GitHub but the blast radius
     # is one comment, easily deleted via `gh`.
     r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
+    # wait-for-reviews.sh: polls `gh api statusCheckRollup` + PR comments
+    # until CI and CodeRabbit have settled. Read-only aside from waiting.
+    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/process-reviews/scripts/wait-for-reviews\.sh\b",
     # echo: harmless producer used to feed stdin into reply-to-pr-thread.sh
     # (and similar safe-pipe-bash patterns). Surviving content has no shell
     # metachars (UNSAFE_META check earlier would have asked first).

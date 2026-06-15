@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
-# Fetch unresolved CodeRabbit review threads (and review-summary nitpicks) for a GitHub PR.
-# Always emits Markdown to stdout AND writes the full filtered JSON to a tempfile.
+# Fetch unresolved CodeRabbit review threads, review-summary nitpicks, AND
+# review-summary "Outside diff range" comments for a GitHub PR. Outside-diff
+# comments are CodeRabbit findings on lines NOT in the PR's diff hunks (e.g. an
+# unchanged adjacent block); they live in the same PullRequestReview body as
+# the Nitpick section but in a separate <details><summary>⚠️ Outside diff
+# range comments (N)</summary>...</details> block. They are NEVER threaded
+# review comments, so they don't surface through pulls/N/comments or the
+# reviewThreads GraphQL connection. Always emits Markdown to stdout AND writes
+# the full filtered JSON to a tempfile.
 set -euo pipefail
 
 usage() {
@@ -222,6 +229,53 @@ nitpicks="$(echo "$nitpick_reviews" | jq '
     ]
 ')"
 
+# ---- Fetch "Outside diff range" comments from review bodies (REST) ----
+# Same source as nitpicks (PullRequestReview.body), different sibling section.
+# CodeRabbit wraps these in:
+#   <details><summary>⚠️ Outside diff range comments (N)</summary>BODY</details>
+# Reviews without the marker are skipped entirely (unlike nitpicks, there is
+# no "keep full body" fallback here — that would conflate the section with
+# the review's other prose).
+outside_reviews="$(echo "$reviews_json" | jq --arg re "$CODERABBIT_LOGIN_RE" '
+    [ .[]
+      | select(.user.login // "" | test($re))
+      | select(.body != null and .body != "")
+      | select(.body | test("Outside diff range"; "i"))
+      | { url: .html_url, submitted_at: .submitted_at, body: .body }
+    ]
+')"
+
+outside_diff="$(echo "$outside_reviews" | jq '
+    # Outside-diff blocks contain nested <details> sections (Suggested fix /
+    # Prompt for AI Agents), so a naïve non-greedy `[\s\S]*?</details>` regex
+    # truncates at the first nested close. Anchor instead on the un-quoted
+    # `🤖 Prompt for all review comments with AI agents` footer that CR
+    # appends to every review body after the findings sections. Falls back
+    # to ℹ️ Review info, then end-of-body, so a missing footer never drops
+    # the section silently.
+    def split_first($marker):
+        (split($marker)) as $p
+        | if ($p | length) > 1 then $p[0] else . end;
+    def extract_outside(body):
+        (body | split("⚠️ Outside diff range comments")) as $parts
+        | if ($parts | length) < 2 then null
+          else
+            ($parts[1:] | join("⚠️ Outside diff range comments"))
+            # Strip the trailing `(N)</summary><blockquote>` left over after
+            # splitting on the headline marker, so the rendered block starts
+            # on the first finding rather than on the opening tags.
+            | sub("^\\s*\\(?[0-9]*\\)?</summary><blockquote>\\s*(>\\s*)?"; "")
+            | split_first("🤖 Prompt for all review comments with AI agents")
+            | split_first("ℹ️ Review info")
+          end;
+    [ .[]
+      | . as $r
+      | (extract_outside($r.body)) as $inner
+      | select($inner != null)
+      | { url: $r.url, submitted_at: $r.submitted_at, block: $inner }
+    ]
+')"
+
 # ---- Write JSON file ----
 ts="$(date -u +%Y%m%d-%H%M%S)"
 json_out="${TMPDIR:-/tmp}/coderabbit-threads-${PR}-${ts}.json"
@@ -230,7 +284,8 @@ jq -n \
     --arg repo "$REPO" \
     --argjson threads "$threads_filtered" \
     --argjson nitpicks "$nitpicks" \
-    '{pr: $pr, repo: $repo, threads: $threads, nitpicks: $nitpicks}' \
+    --argjson outside_diff "$outside_diff" \
+    '{pr: $pr, repo: $repo, threads: $threads, nitpicks: $nitpicks, outside_diff: $outside_diff}' \
     > "$json_out"
 
 # ---- Render Markdown ----
@@ -281,6 +336,29 @@ else
             "Review: \($n.url)   Submitted: \($n.submitted_at // "")",
             "",
             (($n.block // "") | split("\n") | map("> " + .) | join("\n")),
+            "",
+            "---",
+            ""
+          )
+    '
+fi
+
+echo "## CodeRabbit outside-diff-range comments"
+echo
+outside_count="$(echo "$outside_diff" | jq 'length')"
+if [ "$outside_count" = "0" ]; then
+    echo "_No outside-diff comments._"
+    echo
+else
+    echo "$outside_diff" | jq -r '
+        to_entries[]
+        | (.key + 1) as $i
+        | .value as $o
+        | (
+            "### Outside-diff \($i)",
+            "Review: \($o.url)   Submitted: \($o.submitted_at // "")",
+            "",
+            (($o.block // "") | split("\n") | map("> " + .) | join("\n")),
             "",
             "---",
             ""

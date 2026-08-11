@@ -41,6 +41,14 @@ Interview me in detail.
 Cover implementation approach, edge cases, gotchas, design choices, tradeoffs, and constraints.
 Skip obvious questions.
 Ask one at a time and build on my answers.
+
+**IMPORTANT — WHENEVER you ask me to make a choice, you MUST give, for the
+decision, explicit PROS and CONS of each option AND a clear RECOMMENDATION of
+which one you'd pick and why. This is non-negotiable. Never present options as
+a bare menu. If you use a structured/multiple-choice prompt, spell out the
+pros, the cons, and the recommendation inside it — do not rely on a one-line
+description to carry them.**
+
 When you think you have enough information, return a detailed, complete spec.
 In the spec you write, NEVER take shortcuts or make simplifications or
 extensions to the original requirements without asking me about each one first.
@@ -79,6 +87,11 @@ on what we agree on before writing implementation.
 Implement the plan. Run the full non-integration test suite (per
 `feedback_unit_tests_only.md`) after changes and fix any failures. Do not
 declare done until every test from Step 4/5 passes.
+
+When writing code AND tests (Steps 4 and 6), follow the `concise-comments`
+skill: no design essays, ticket-ID-on-every-line, or code-restating comments;
+docstrings to a line. Rationale belongs in the spec / PR description / this
+issue — not in code — so verbose comments never get written in the first place.
 
 ## Step 7 — Ask me to commit, push, and PR
 

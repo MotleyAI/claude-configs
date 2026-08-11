@@ -119,7 +119,7 @@ Don't dedupe across sources blindly — if multiple sources flag the same area, 
 
 For each entry, classify as VALID or INVALID using a source-appropriate signal:
 
-- **CodeRabbit / Sonar / Codex** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now.
+- **CodeRabbit / Sonar / Codex** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now. Over-verbose comments/docstrings in the diff (design essays, ticket-ID-on-every-line, code-restating comments, name-echo docstrings) are a valid maintainability finding per the `concise-comments` skill — flag them even if no bot did.
 - **CI failure** — READ the failed-step log excerpt in the JSON. Classify as INVALID only when the failure is clearly unrelated to this PR's changes (network blip / runner died / well-known flaky test that the user has previously confirmed is flaky / out-of-date Action that times out before doing anything). Otherwise VALID. **A test failure that points at code this PR touched is always VALID** — don't argue your way out of it.
 
 Codex-specific validation hazards (apply on top of the shared CodeRabbit/Sonar rules):
@@ -237,6 +237,7 @@ Do **not** start writing code until the user picks.
 - NEVER call any "resolve" mutation on CodeRabbit threads (no `resolveReviewThread`, no UI-equivalent). Only `/replies`. This is a hard global rule from the user.
 - NOSONAR suppressions MUST include the rule key and a reason. Bare `// NOSONAR` is forbidden. The rule key inside the parentheses must be alphanumeric only — never include the `python:` / `javascript:` / etc. language prefix (it makes Sonar treat the suppression as malformed).
 - This skill stops at the plan. Code fixes happen only after the user picks a group.
+- When you later write fixes, keep any comments/docstrings concise per the `concise-comments` skill — don't add design essays or code-restating comments while resolving findings.
 - If validation makes you LESS than 80% confident an issue is invalid, classify it as VALID and put it in the plan. Better to over-fix than to silently dismiss a real bug.
 
 ## When NOT to use this skill

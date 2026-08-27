@@ -7,6 +7,31 @@ I want a detailed spec. The brief is the union of:
 1. The Linear issue tied to the current branch (see Step 1), AND
 2. Whatever I just typed when invoking this skill.
 
+## Stopping policy — read this first
+
+This flow has **exactly three mandatory hard stops** so I can reset your context.
+Everything you need at each is already on disk, so a fresh session resumes from
+just the branch name:
+
+1. **Before tests** — before Step 4
+2. **Before implementation** — before Step 6
+3. **Immediately after the PR is created** — in Step 7, before the `/process-reviews` loop
+
+At each: say we're at that reset point, then STOP and wait — do not start the next
+phase. I'll `/clear` and return with "continue on branch `<BRANCH>`"; you rehydrate
+by re-running Step 1 and reading the change folder (and the Linear issue).
+
+**Between the stops, run autonomously — do NOT stop or ask permission to proceed.**
+The only other permitted pauses are:
+- the **Step 2 interview** (its whole point is questioning me);
+- a **nontrivial design decision** — a real fork with more than one reasonable
+  option — raised with explicit PROS/CONS + RECOMMENDATION (Step 2 rule). A choice
+  with an obvious default is NOT this: take the default and move on;
+- the standing **go-ahead gate before commit/push/PR** (Step 7), per my global rules.
+
+Never stop just to report progress, to confirm an obvious next step, or to ask
+something you can determine yourself.
+
 ## Step 1 — Pull in the Linear issue for the current branch
 
 Look up the Linear issue whose `gitBranchName` equals the current git branch
@@ -121,6 +146,12 @@ instructions; follow them so the output passes `validate --strict`.
 
 ## Step 4 — Write the tests first
 
+> **🛑 HARD STOP (reset point 1 of 3) — before tests.** First make the plan
+> durable: if `OPENSPEC=1` it's the validated change folder; if `OPENSPEC=0`, post
+> the finalized plan to the Linear issue (a comment) so a reset recovers it via
+> Step 1. Then STOP and wait for my reset — do not start writing tests until I
+> resume.
+
 Following the TDD-style memory (`feedback_tdd_style.md`): land the **full**
 test suite for the agreed plan before writing any implementation. Tests
 should fail for the right reason (feature missing), not for setup reasons.
@@ -144,6 +175,10 @@ If `OPENSPEC=1`, "the plan" includes the delta specs: verify every ADDED/MODIFIE
 requirement and each of its scenarios has a covering test.
 
 ## Step 6 — Implement until tests pass
+
+> **🛑 HARD STOP (reset point 2 of 3) — before implementation.** The finalized
+> failing tests are on disk alongside the plan. STOP and wait for my reset — do
+> not start implementing until I resume.
 
 Implement the plan. Run the full non-integration test suite (per
 `feedback_unit_tests_only.md`) after changes and fix any failures. Do not
@@ -171,7 +206,11 @@ delta specs). Put `openspec diff <CHANGE_ID>` in the PR description so reviewers
 see the spec surface change. Do NOT archive yet — that happens post-merge
 (Step 8).
 
-After you've done executing the plan, call /process-reviews in a loop until there are no more issues to fix.
+> **🛑 HARD STOP (reset point 3 of 3) — just after the PR is created.** Code,
+> tests, and the change folder are committed and the PR exists. STOP and wait for
+> my reset before starting the review loop below.
+
+After the reset, call /process-reviews in a loop until there are no more issues to fix.
 
 ## Step 8 — Archive the OpenSpec change (OpenSpec repos only, AFTER the PR merges)
 

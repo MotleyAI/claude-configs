@@ -120,7 +120,10 @@ instructions; follow them so the output passes `validate --strict`.
      files must exist) and `## Impact`.
    - **specs/<capability-path>/spec.md** (the delta — the crux) — one file per
      capability from the proposal, using `## ADDED` / `## MODIFIED` / `## REMOVED`
-     / `## RENAMED Requirements`. Each requirement is `### Requirement: <name>` in
+     / `## RENAMED Requirements`. A **new** capability's file also needs a
+     `## Purpose` (50+ chars) — omit it for an existing capability, else `archive`
+     stamps a `TBD` placeholder into the corpus. Each requirement is
+     `### Requirement: <name>` in
      SHALL/MUST language with **≥1** `#### Scenario:` in WHEN/THEN form. Validator
      gotchas: scenarios need **exactly four** `#` (three or bullets fail
      silently); MODIFIED must contain the FULL updated requirement; REMOVED needs

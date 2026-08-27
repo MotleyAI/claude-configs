@@ -202,8 +202,8 @@ standard commit/PR workflow (specific `git add` for each new file, never
 
 If `OPENSPEC=1`, the whole `openspec/changes/<CHANGE_ID>/` folder is part of the
 change — `git add` it explicitly alongside the code (proposal, design, tasks,
-delta specs). Put `openspec diff <CHANGE_ID>` in the PR description so reviewers
-see the spec surface change. Do NOT archive yet — that happens post-merge
+delta specs). Put `openspec show <CHANGE_ID> --diff` output in the PR description
+so reviewers see the spec surface change. Do NOT archive yet — that happens post-merge
 (Step 8).
 
 > **🛑 HARD STOP (reset point 3 of 3) — just after the PR is created.** Code,

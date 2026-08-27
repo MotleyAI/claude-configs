@@ -36,9 +36,13 @@ unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 # Safe I/O redirections to strip before checking for shell metacharacters
 SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
 
-# Shell metacharacters that can't be safely decomposed
-# Note: && and | are handled separately with smarter logic
-UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
+# Shell metacharacters that can't be safely decomposed by splitting:
+# command substitution and grouping ( $(...), backticks, (), {} ), redirects
+# ( <, > ), and newlines. Statement separators (&& and ;) and pipes (|) are
+# deliberately NOT here — they're decomposed below and each part is vetted
+# individually, so a `;`-chain is approved iff every one of its parts would be
+# approved on its own (the same treatment && already gets).
+UNSAFE_META = re.compile(r'[`$(){}\n<>]')
 
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
@@ -55,6 +59,12 @@ SAFE_PIPE_SCRIPT_PATHS = {
     # trip the unsafe-pipe branch.
     os.path.expanduser(
         "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
+    ),
+    # reply-invalid-coderabbit.sh: prepends `@coderabbitai ` and delegates to
+    # reply-to-pr-thread.sh — same blast radius (one PR reply comment). The
+    # process-reviews skill invokes it in the `cat <<'EOF' | bash …` pipe form.
+    os.path.expanduser(
+        "~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh"
     ),
 }
 
@@ -107,6 +117,9 @@ SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    # git ls-remote: read-only network — lists remote refs, mutates nothing
+    # (same risk class as fetch, strictly less powerful).
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+ls-remote\b",
     # git push (plain — dangerous variants are caught earlier by
     # ASK_ALWAYS_PATTERNS, so anything reaching here is non-force, non-delete).
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
@@ -161,6 +174,12 @@ SAFE_UNSANDBOXED_PATTERNS = [
     # (and similar safe-pipe-bash patterns). Surviving content has no shell
     # metachars (UNSAFE_META check earlier would have asked first).
     r"^echo\b",
+    # Bare `cat` (no file operands) — a pure stdin passthrough, used as the
+    # producer of a quoted-heredoc pipe (`cat <<'EOF' | bash safe.sh URL`). The
+    # heredoc body is stripped upstream, leaving just `cat`. A `cat <file>` form
+    # keeps its operand and does NOT match (so it still asks), and the pipe
+    # TARGET must independently be a safe consumer (strip_safe_pipes).
+    r"^cat\s*$",
 ]
 
 # Commands that genuinely need network + keyring — must run with bypass.
@@ -297,9 +316,17 @@ def normalize_cmd(raw):
     return s
 
 
-def split_on_and(cmd):
-    """Split command on && outside of quotes. Returns list of parts,
-    or None if the command can't be safely split (unbalanced quotes)."""
+def split_statements(cmd):
+    """Split a command into statements on `&&` and `;` outside of quotes.
+    Returns the list of statement parts, or None if the command can't be
+    safely split — a single `&` (background execution) or unbalanced quotes.
+
+    `;` and `&&` are both plain statement separators here; each resulting part
+    is vetted independently by evaluate_single_cmd, so a `;`-chain is approved
+    iff every part would be approved on its own. `|` is left intact inside each
+    part — pipes are handled downstream by strip_safe_pipes. Command
+    substitution / grouping ( $(...), backticks, (), {} ) never reaches this
+    splitter — it's rejected earlier by the UNSAFE_META check when unsandboxed."""
     parts = []
     current = []
     in_single = False
@@ -322,6 +349,9 @@ def split_on_and(cmd):
             else:
                 # Single & (background) — not safe to decompose
                 return None
+        elif c == ';' and not in_single and not in_double:
+            parts.append(''.join(current).strip())
+            current = []
         else:
             current.append(c)
         i += 1
@@ -396,6 +426,43 @@ def strip_safe_tmp_redirects(s):
     def repl(m):
         return '' if is_safe_tee_path(m.group(1)) else m.group(0)
     return SAFE_TMP_REDIRECT.sub(repl, s)
+
+
+# Quoted-delimiter heredoc marker: <<'EOF', <<"EOF", <<-'EOF'. The quoted
+# delimiter means the body undergoes NO shell expansion, so the body is inert
+# stdin data. An UNQUOTED heredoc (<<EOF) expands $(...) / $var in its body and
+# is deliberately NOT matched here — it keeps tripping the compound-command guard.
+_QUOTED_HEREDOC_RE = re.compile(r"<<-?\s*(['\"])(\w+)\1")
+
+
+def strip_quoted_heredocs(cmd):
+    """Remove quoted-delimiter heredoc markers AND their bodies from a command.
+
+    ``cat <<'EOF' | bash safe.sh URL\\n<body>\\nEOF`` becomes
+    ``cat  | bash safe.sh URL`` — the inert stdin data is dropped so the leftover
+    ``<`` (from ``<<``) and the body newlines don't trip the metacharacter /
+    decomposition checks, while the real command (producer + safe pipe target)
+    is still vetted normally. Only quoted delimiters are stripped; a malformed
+    heredoc (no closing delimiter) is left intact so the guard still asks.
+    """
+    while True:
+        m = _QUOTED_HEREDOC_RE.search(cmd)
+        if not m:
+            return cmd
+        delim = m.group(2)
+        # Body starts at the first newline AFTER the marker's line (the rest of
+        # that line — e.g. `| bash safe.sh URL` — is real command, kept).
+        nl = cmd.find("\n", m.end())
+        if nl == -1:
+            return cmd  # no body/newline — malformed; let the meta check ask
+        close = re.compile(
+            r"\n[ \t]*" + re.escape(delim) + r"(?:\n|$)"
+        ).search(cmd, nl)
+        if not close:
+            return cmd  # no closing delimiter — malformed; let the meta check ask
+        # Drop the marker (→ space) and the body block [nl:close.end()]; keep the
+        # rest of the marker's line (cmd[m.end():nl]) and anything after close.
+        cmd = cmd[:m.start()] + " " + cmd[m.end():nl] + cmd[close.end():]
 
 
 # Flags that consume the next argv token as a value (not a file operand).
@@ -618,6 +685,9 @@ if tool != "Bash":
 # Strip safe redirections and quoted strings for metacharacter check
 cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
 cmd_for_meta_check = strip_safe_tmp_redirects(cmd_for_meta_check)
+# Drop quoted-delimiter heredoc bodies (inert stdin data) so `<<` and the body
+# newlines don't read as a compound command; the producer + pipe target remain.
+cmd_for_meta_check = strip_quoted_heredocs(cmd_for_meta_check)
 cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 
 # Check for truly unsafe metacharacters (not && or |, those are handled below).
@@ -627,16 +697,17 @@ cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 if unsandboxed and UNSAFE_META.search(cmd_unquoted):
     ask(f"Compound command: {cmd[:120]}")
 
-# Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)
-and_parts = split_on_and(cmd_for_meta_check)
-if and_parts is None:
+# Decompose into statements on && and ; (redirect-stripped so 2>&1 isn't
+# read as a single &). None => a single `&` background op or unbalanced quotes.
+stmt_parts = split_statements(cmd_for_meta_check)
+if stmt_parts is None:
     if unsandboxed:
         ask(f"Compound command: {cmd[:120]}")
     # Inside sandbox with unparseable command — sandbox contains it, allow
-    and_parts = [cmd_for_meta_check]
+    stmt_parts = [cmd_for_meta_check]
 
-# Evaluate each part of the && chain (or just the single command)
-for part in and_parts:
+# Evaluate each statement (each part of the && / ; chain, or the single command)
+for part in stmt_parts:
     decision, reason = evaluate_single_cmd(part, unsandboxed)
     if decision == "deny":
         deny(reason)

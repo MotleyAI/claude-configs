@@ -131,6 +131,21 @@ while :; do
         | sort | last // ""')
 
     if [[ -n "$cr_updated" && "$cr_updated" > "$head_committed" ]]; then
+        # A fresh timestamp is necessary but NOT sufficient. When CodeRabbit
+        # hits its Fair Usage limit it REPLACES the summary body with a
+        # "Review limit reached" warning — which advances ``updated_at`` and
+        # flips the status check to SUCCESS, so both of the signals this gate
+        # relies on say "done" while nothing was actually reviewed. Detect the
+        # rate-limit marker and report it, rather than declaring the PR clean
+        # off a review that never ran.
+        if gh api "repos/$REPO/issues/$PR/comments" --jq '
+                [.[] | select(.user.login | test("coderabbitai"; "i"))]
+                | sort_by(.updated_at) | last | .body // ""' \
+                | grep -q "rate limited by coderabbit.ai\|Review limit reached"; then
+            echo "Stage 0b: CodeRabbit is RATE LIMITED — no review ran for this HEAD." >&2
+            echo "Stage 0b: re-trigger with 'gh pr comment $PR --repo $REPO --body \"@coderabbitai review\"' once the window clears." >&2
+            exit 3
+        fi
         echo "Stage 0b: CodeRabbit summary updated ($cr_updated > $head_committed)."
         exit 0
     fi

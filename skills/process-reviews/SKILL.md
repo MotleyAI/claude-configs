@@ -94,14 +94,15 @@ Once the script exits, proceed to Step 1.
 
   If `mcp__sonarqube__*` tools are not registered in this session, stop and ask the user to load the MCP — do not fall back to the CLI or `gh api`.
 - **Failed CI** — invoke the `fetch-failed-pr-checks` skill (script: `~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh <PR>`). Read its JSON for the failed checks plus failed-step log excerpts.
+- **Conventions gate (deterministic)** — run `bash ~/.claude/skills/process-reviews/scripts/check-conventions.sh <PR>` from the repo root (needs network for the base-branch lookup — `dangerouslyDisableSandbox: true`). It AST-checks the PR's modified `.py` files (WHOLE file, committed ∪ working tree) for `[import-not-top]`: no imports inside functions/classes, no module-level imports after non-import code; module-level `if TYPE_CHECKING:` / optional-dep `try:` import wrappers are fine. Exit 0 = clear, 1 = RED with one `file:line: [rule] message` per finding, 2 = usage/git error. This is a HARD GATE: the loop is not done while it is RED. (A kwarg-usage check is deliberately NOT part of this gate — the user will add one later on a language-server basis.)
 
-Run the three GitHub-side fetches in parallel — they're independent. Codex is already done (Step 0). Inside SonarQube, the gate-status call comes first so you know which secondary tools (duplications / coverage / hotspots) are actually load-bearing; everything else can run in parallel.
+Run the three GitHub-side fetches and the conventions gate in parallel — they're independent. Codex is already done (Step 0). Inside SonarQube, the gate-status call comes first so you know which secondary tools (duplications / coverage / hotspots) are actually load-bearing; everything else can run in parallel.
 
 ### 2. Merge into one normalised list
 
 Build a single in-memory list. Each entry:
 
-- `source`: `"coderabbit"` | `"sonar"` | `"codex"` | `"ci"`
+- `source`: `"coderabbit"` | `"sonar"` | `"codex"` | `"ci"` | `"conventions"`
 - `sonar_kind` (when `source == "sonar"`): `"issue"` | `"hotspot"` | `"duplication"` | `"coverage"` | `"gate_condition"` — distinguishes the gate-criterion subtypes since each has its own invalid-handling channel (NOSONAR only applies to issues; hotspots have a review workflow; duplications/coverage/gate-conditions need code changes or `--force-clean`-style suppressions specific to the metric).
 - `file`: path relative to repo root, or `null` for CI failures (the failure may not map to a single file) and for project-level gate conditions
 - `line`: integer or `null` (or a `[start, end]` range for duplication blocks; codex findings should carry a line range when they cite one, single line otherwise)
@@ -119,8 +120,9 @@ Don't dedupe across sources blindly — if multiple sources flag the same area, 
 
 For each entry, classify as VALID or INVALID using a source-appropriate signal:
 
-- **CodeRabbit / Sonar / Codex** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now.
+- **CodeRabbit / Sonar / Codex** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now. Over-verbose comments/docstrings in the diff (design essays, ticket-ID-on-every-line, code-restating comments, name-echo docstrings) are a valid maintainability finding per the `concise-comments` skill — flag them even if no bot did.
 - **CI failure** — READ the failed-step log excerpt in the JSON. Classify as INVALID only when the failure is clearly unrelated to this PR's changes (network blip / runner died / well-known flaky test that the user has previously confirmed is flaky / out-of-date Action that times out before doing anything). Otherwise VALID. **A test failure that points at code this PR touched is always VALID** — don't argue your way out of it.
+- **Conventions** — always VALID (the check is deterministic; there is nothing to second-guess). The fix is hoisting the import to module top; only a genuine circular import may instead get a reasoned waiver comment on the flagged line (`# ALLOW(import-not-top): <reason>`), and per the user's CLAUDE.md you must CONFIRM WITH THE USER before landing a waiver. Severity `minor`, `rule` = the bracketed rule name, `ref` = `null`.
 
 Codex-specific validation hazards (apply on top of the shared CodeRabbit/Sonar rules):
 
@@ -237,6 +239,7 @@ Do **not** start writing code until the user picks.
 - NEVER call any "resolve" mutation on CodeRabbit threads (no `resolveReviewThread`, no UI-equivalent). Only `/replies`. This is a hard global rule from the user.
 - NOSONAR suppressions MUST include the rule key and a reason. Bare `// NOSONAR` is forbidden. The rule key inside the parentheses must be alphanumeric only — never include the `python:` / `javascript:` / etc. language prefix (it makes Sonar treat the suppression as malformed).
 - This skill stops at the plan. Code fixes happen only after the user picks a group.
+- When you later write fixes, keep any comments/docstrings concise per the `concise-comments` skill — don't add design essays or code-restating comments while resolving findings.
 - If validation makes you LESS than 80% confident an issue is invalid, classify it as VALID and put it in the plan. Better to over-fix than to silently dismiss a real bug.
 
 ## When NOT to use this skill

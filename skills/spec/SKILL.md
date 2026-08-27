@@ -31,6 +31,17 @@ byte-equal to the issue's `gitBranchName`. That equality is the join key.
 5. Once a match is confirmed, read the issue body in full
    (`mcp__linear__get_issue` already returns it) plus any comments via
    `mcp__linear__list_comments`.
+6. **Set the change-id and resolve OpenSpec.** `CHANGE_ID` = `$BRANCH` with any
+   leading `<user>/` segment stripped (Linear's copied branch names look like
+   `egor/dev-1330-slayer-storage`, so `CHANGE_ID=dev-1330-slayer-storage`). This
+   keeps Linear issue ↔ git branch ↔ OpenSpec change 1:1:1. Then resolve OpenSpec:
+   - If an `openspec/` directory exists at the repo root and it's healthy, set
+     `OPENSPEC=1`.
+   - If `openspec/` is **absent or invalid**, ask me whether to initialize this
+     repo for OpenSpec now (one-time) or run this change without it. If yes,
+     invoke the **`openspec-init`** skill (it resolves the CLI and scaffolds the
+     corpus), then set `OPENSPEC=1`. If no, set `OPENSPEC=0`.
+   - When `OPENSPEC=0`, skip every step below marked *"OpenSpec repos only."*
 
 ## Step 2 — Combine and interview
 
@@ -65,11 +76,48 @@ Bring Codex's findings back to me and discuss them. For each finding, decide
 together whether to fold it into the plan, defer it, or reject it. Update the
 written spec to reflect the resolved decisions before moving on.
 
+## Step 3b — Emit the OpenSpec change (OpenSpec repos only)
+
+Skip this whole step unless `OPENSPEC=1` (Step 1). With the plan approved and
+Codex-resolved, materialise it as an OpenSpec change under
+`openspec/changes/<CHANGE_ID>/`, so the deterministic housekeeping (`validate`
+now, `archive` later) can take over. Most of this is a reformat of the plan you
+already wrote — do not re-derive it:
+
+- `proposal.md` — `## Why` (from the Linear issue) and `## What Changes` (from
+  the plan). Both headings are **required** by `validate --strict`.
+- `design.md` — the technical approach and the decisions resolved with Codex in
+  Step 3. Only for non-obvious design; omit if there's nothing to say.
+- `tasks.md` — the implementation checklist as a `- [ ]` checkbox list. This is
+  the SAME list that drives Steps 4/6; maintain it here, not twice.
+- `specs/<capability>/spec.md` — the delta: only what changes, under
+  `## ADDED Requirements` / `## MODIFIED Requirements` / `## REMOVED
+  Requirements`, each requirement carrying at least one `#### Scenario:`.
+  Identify the affected capability(ies) from `openspec/specs/` (or
+  `openspec list --specs`): ADDED for new behaviour, MODIFIED/REMOVED against an
+  existing capability. For a MODIFIED requirement, copy the full current
+  requirement text and edit it — archive replaces the requirement wholesale.
+
+Then run the deterministic gate and fix the artifacts until it passes, **before**
+writing any tests:
+
+```
+openspec validate <CHANGE_ID> --strict
+```
+
+This catches a malformed plan and — crucially — any MODIFIED requirement that no
+longer lines up with the current spec corpus (i.e. spec drift), at plan time, for
+free. The delta's scenarios ARE the acceptance criteria for Step 4.
+
 ## Step 4 — Write the tests first
 
 Following the TDD-style memory (`feedback_tdd_style.md`): land the **full**
 test suite for the agreed plan before writing any implementation. Tests
 should fail for the right reason (feature missing), not for setup reasons.
+
+If `OPENSPEC=1`, derive the test cases from the delta scenarios in
+`openspec/changes/<CHANGE_ID>/specs/<capability>/spec.md` (Step 3b): every
+`#### Scenario:` needs at least one covering test.
 
 ## Step 5 — Codex review of the tests against the plan
 
@@ -82,11 +130,18 @@ plan. Codex should not modify files.
 Bring the findings back to me. Adjust the tests (add, remove, or fix) based
 on what we agree on before writing implementation.
 
+If `OPENSPEC=1`, "the plan" includes the delta specs: verify every ADDED/MODIFIED
+requirement and each of its scenarios has a covering test.
+
 ## Step 6 — Implement until tests pass
 
 Implement the plan. Run the full non-integration test suite (per
 `feedback_unit_tests_only.md`) after changes and fix any failures. Do not
 declare done until every test from Step 4/5 passes.
+
+If `OPENSPEC=1`, tick off `openspec/changes/<CHANGE_ID>/tasks.md` as you complete
+each task (the same checklist from Step 3b — this is the `apply` phase, driven by
+TDD here instead of `/opsx:apply`).
 
 When writing code AND tests (Steps 4 and 6), follow the `concise-comments`
 skill: no design essays, ticket-ID-on-every-line, or code-restating comments;
@@ -100,4 +155,29 @@ Do not do any of these on your own — wait for my go-ahead, then follow the
 standard commit/PR workflow (specific `git add` for each new file, never
 `git add -A`).
 
+If `OPENSPEC=1`, the whole `openspec/changes/<CHANGE_ID>/` folder is part of the
+change — `git add` it explicitly alongside the code (proposal, design, tasks,
+delta specs). Put `openspec diff <CHANGE_ID>` in the PR description so reviewers
+see the spec surface change. Do NOT archive yet — that happens post-merge
+(Step 8).
+
 After you've done executing the plan, call /process-reviews in a loop until there are no more issues to fix.
+
+## Step 8 — Archive the OpenSpec change (OpenSpec repos only, AFTER the PR merges)
+
+Skip unless `OPENSPEC=1`. Archiving folds the delta into the living spec corpus,
+so it must run only once the change is merged/deployed — never at spec time. When
+the PR is merged (i.e. after the Step 7 `/process-reviews` loop settles and I've
+merged), run:
+
+```
+openspec archive <CHANGE_ID>
+```
+
+This merges the delta into `openspec/specs/` (ADDED appended, MODIFIED replaced,
+REMOVED deleted) and moves the change to
+`openspec/changes/archive/YYYY-MM-DD-<CHANGE_ID>/`. Commit the result with
+specific `git add` of the changed `openspec/specs/**` and the moved folder. This
+is the one step that keeps the behaviour corpus current — everything upstream is
+best-effort authoring; `validate` (Step 3b) and `archive` here are the
+deterministic guarantees.

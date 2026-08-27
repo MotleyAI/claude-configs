@@ -78,36 +78,46 @@ written spec to reflect the resolved decisions before moving on.
 
 ## Step 3b — Emit the OpenSpec change (OpenSpec repos only)
 
-Skip this whole step unless `OPENSPEC=1` (Step 1). With the plan approved and
-Codex-resolved, materialise it as an OpenSpec change under
-`openspec/changes/<CHANGE_ID>/`, so the deterministic housekeeping (`validate`
-now, `archive` later) can take over. Most of this is a reformat of the plan you
-already wrote — do not re-derive it:
+Skip this whole step unless `OPENSPEC=1` (Step 1). Turn the approved,
+Codex-resolved plan into an OpenSpec change — but do NOT hand-author the files
+from memory. OpenSpec ships authoritative, version-correct, per-artifact
+instructions; follow them so the output passes `validate --strict`.
 
-- `proposal.md` — `## Why` (from the Linear issue) and `## What Changes` (from
-  the plan). Both headings are **required** by `validate --strict`.
-- `design.md` — the technical approach and the decisions resolved with Codex in
-  Step 3. Only for non-obvious design; omit if there's nothing to say.
-- `tasks.md` — the implementation checklist as a `- [ ]` checkbox list. This is
-  the SAME list that drives Steps 4/6; maintain it here, not twice.
-- `specs/<capability>/spec.md` — the delta: only what changes, under
-  `## ADDED Requirements` / `## MODIFIED Requirements` / `## REMOVED
-  Requirements`, each requirement carrying at least one `#### Scenario:`.
-  Identify the affected capability(ies) from `openspec/specs/` (or
-  `openspec list --specs`): ADDED for new behaviour, MODIFIED/REMOVED against an
-  existing capability. For a MODIFIED requirement, copy the full current
-  requirement text and edit it — archive replaces the requirement wholesale.
+1. **Scaffold:** `openspec new change <CHANGE_ID>` (creates
+   `openspec/changes/<CHANGE_ID>/.openspec.yaml`; artifacts are added next).
+2. **Author each artifact in dependency order** — proposal → specs → design →
+   tasks. For each, run `openspec instructions <artifact> --change <CHANGE_ID>`
+   and obey the emitted `<instruction>` + `<template>`, writing to the `<output>`
+   path it names. `openspec status --change <CHANGE_ID>` shows what's done/blocked.
+   Most of this is a reformat of the plan — don't re-derive it:
+   - **proposal.md** — `## Why` + `## What Changes` (from the Linear issue +
+     plan), plus `## Capabilities` (New/Modified — this list decides which delta
+     files must exist) and `## Impact`.
+   - **specs/<capability-path>/spec.md** (the delta — the crux) — one file per
+     capability from the proposal, using `## ADDED` / `## MODIFIED` / `## REMOVED`
+     / `## RENAMED Requirements`. Each requirement is `### Requirement: <name>` in
+     SHALL/MUST language with **≥1** `#### Scenario:` in WHEN/THEN form. Validator
+     gotchas: scenarios need **exactly four** `#` (three or bullets fail
+     silently); MODIFIED must contain the FULL updated requirement; REMOVED needs
+     **Reason** + **Migration**; RENAMED uses FROM:/TO:. These scenarios ARE the
+     Step 4 acceptance criteria.
+   - **design.md** — only for non-obvious design (the Codex-resolved decisions);
+     skip if there's nothing to say.
+   - **tasks.md** — the `- [ ]` checklist that also drives Steps 4/6; maintain it
+     here, not twice.
+3. **No spec-level behaviour change?** (pure refactor, tooling, docs, or a fix
+   that doesn't alter specified behaviour) — do NOT invent a requirement; set
+   `skip_specs: true` in `openspec/changes/<CHANGE_ID>/.openspec.yaml`. Specs
+   describe behaviour, so if behaviour doesn't change, no spec should.
+4. **Gate before writing any tests:**
 
-Then run the deterministic gate and fix the artifacts until it passes, **before**
-writing any tests:
+   ```
+   openspec validate <CHANGE_ID> --strict
+   ```
 
-```
-openspec validate <CHANGE_ID> --strict
-```
-
-This catches a malformed plan and — crucially — any MODIFIED requirement that no
-longer lines up with the current spec corpus (i.e. spec drift), at plan time, for
-free. The delta's scenarios ARE the acceptance criteria for Step 4.
+   Fix until green. This catches a malformed plan and — crucially — any MODIFIED
+   requirement that no longer lines up with the current corpus (spec drift), at
+   plan time, for free.
 
 ## Step 4 — Write the tests first
 

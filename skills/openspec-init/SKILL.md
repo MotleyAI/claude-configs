@@ -24,11 +24,12 @@ Use `$OPENSPEC_CMD` for every openspec call below and hand it back to the caller
 
 Run from the repo root (`init` writes `openspec/` into the cwd). Classify:
 
-- **Absent** — no `openspec/` dir → Step 3.
-- **Healthy** — `openspec/` exists and `$OPENSPEC_CMD list` runs cleanly → nothing
-  to do; report and return.
-- **Invalid** — `openspec/` exists but `list`/`doctor` errors, or `specs/` or
-  `changes/` is missing → Step 4.
+- **Absent** — no `openspec/config.yaml` → Step 3.
+- **Healthy** — `openspec/config.yaml` exists and `$OPENSPEC_CMD list` runs
+  cleanly → nothing to do; report and return. (A healthy repo may have no
+  `specs/` or `changes/` yet — see Step 3 — so their absence is NOT invalid.)
+- **Invalid** — `openspec/` exists but has no `config.yaml`, or `list`/`doctor`
+  errors → Step 4.
 
 ## Step 3 — Initialize (absent)
 
@@ -36,9 +37,12 @@ Run from the repo root (`init` writes `openspec/` into the cwd). Classify:
 $OPENSPEC_CMD init --tools none --no-animation
 ```
 
-Add `--force` only if it complains about legacy files. This creates
-`openspec/specs/`, `openspec/changes/`, and `openspec/project.md`. `--tools none`
-keeps it corpus-only.
+Add `--force` only if it complains about legacy files. This creates just
+`openspec/config.yaml` (`schema: spec-driven`); `--tools none` keeps it
+corpus-only (no `/opsx:*` commands or AGENTS wiring — `/spec` gets its authoring
+format from `openspec instructions`). Note: `changes/<id>/` is created later by
+`openspec new change`, and `specs/` by the first `openspec archive` — init alone
+lays down only `config.yaml`.
 
 ## Step 4 — Repair (invalid)
 

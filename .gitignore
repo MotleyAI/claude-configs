@@ -7,3 +7,21 @@ shell-snapshots
 projects
 ide
 .claude.json
+
+# Runtime state (machine-local, never committed)
+agentbox/
+backups/
+cache/
+chrome/
+file-history/
+plans/
+plugins/
+sessions/
+tasks/
+paste-cache/
+__pycache__/
+history.jsonl
+settings.local.json
+mcp-needs-auth-cache.json
+.last-cleanup
+.last-update-result.json

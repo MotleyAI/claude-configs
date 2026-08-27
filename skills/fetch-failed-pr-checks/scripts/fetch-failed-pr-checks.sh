@@ -114,6 +114,21 @@ while [ "$i" -lt "$n" ]; do
             gh run view "$run_id" --repo "$REPO" --log-failed 2>/dev/null \
                 | tail -n "$MAX_LOG" > "$log_file" || true
         fi
+        # `--log-failed` emits only steps GitHub marked as failed. A job can
+        # fail with NO such step — a service container that never came up, a
+        # failing post/cleanup step, or a runner-level abort — and then the
+        # excerpt is empty and the failure looks like an unreachable external
+        # CI. Fall back to the tail of the FULL log, which is where the real
+        # error is in exactly those cases.
+        if [ ! -s "$log_file" ]; then
+            if [ -n "$job_id" ]; then
+                gh run view --job "$job_id" --repo "$REPO" --log 2>/dev/null \
+                    | tail -n "$MAX_LOG" > "$log_file" || true
+            elif [ -n "$run_id" ]; then
+                gh run view "$run_id" --repo "$REPO" --log 2>/dev/null \
+                    | tail -n "$MAX_LOG" > "$log_file" || true
+            fi
+        fi
     fi
 
     jq -n \

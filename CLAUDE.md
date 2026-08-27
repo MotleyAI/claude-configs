@@ -1,4 +1,4 @@
-When using LLMs to output Pydantic classes, ALWAYS make sure these classes don't contain 
+When using LLMs to output Pydantic classes that are used as output schemas for LLMs, ALWAYS make sure these classes don't contain 
 any Dict-typed fields, instead use lists of helper classes with a name field. So for example instead of 
 ```python
 class Foo(BaseModel):
@@ -68,7 +68,21 @@ all three statusCheckRollup typenames (CheckRun / StatusContext / WorkflowRun)
 and bundles failed-step logs in one call. If the skill is missing a flag you
 need, extend the skill rather than reaching for `gh` directly.
 
+NEVER mention Linear issues in docstrings or docs (apart from the architecture folder and if subfolders, if these exist)
+
+Always keep docstrings as CONCISE as possible!!!
+
+If a tool you're supposed to use, such as Perplexity or Linear MCP, doesn't work, NEVER EVER try to improvise around it. 
+Instead, stop and ask me to fix it. 
+
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
 **Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
 `dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox
 blocks, and running them sandboxed first will be denied by the PreToolUse hook.
+
+NEVER EVER add a commit comment like "Co-authored by Claude Code" - you're just a hired grunt, I'm the author
+When merging anything into a branch, commit local changes then merge, NEVER STASH NEVER REBASE
+
+When running `git merge -m`, the message's first line MUST contain the merged ref in
+single quotes, e.g. `Merge branch 'origin/main' ...` — GitKraken crashes and refuses to
+open the repo/worktree while a merge whose MERGE_MSG lacks a 'quoted' ref sits uncommitted.

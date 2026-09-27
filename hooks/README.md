@@ -24,7 +24,7 @@ Exceptions (would fail inside sandbox anyway due to no keyring/socket):
 | `cmd \| safe_filter` | **evaluate cmd** | Safe pipe targets: head, tail, grep, wc, sort |
 | `git push`, `docker` | **ask** | Dangerous — mutate remote/state |
 | `git fetch` | **allow** | Read-only, just needs keyring |
-| `gh` reads (`pr/issue/run/repo list/view`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
+| `gh` reads (`pr/issue/run/repo list/view`, `pr checks`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
 | All other `gh` commands | **ask** | Unknown = assume write |
 | `wc` (standalone) | **allow** | Counts only, no content exposure |
 | Everything else | **ask** | No reason to bypass sandbox |

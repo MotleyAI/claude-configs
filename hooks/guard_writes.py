@@ -4,11 +4,11 @@
 # Guards dangerous operations in two layers:
 #
 # 1. Sandbox bypass: any command with dangerouslyDisableSandbox=true
-#    is prompted UNLESS it's a known-safe command that legitimately
-#    needs unsandboxed access (gh reads, git fetch/pull).
+#    is prompted UNLESS it's a known-safe command (gh reads, git fetch/pull).
+#    Network git/gh inside the sandbox gets the same allow/ask verdict.
 #
-# 2. Dangerous commands: git push, gh writes, docker — always prompt
-#    regardless of sandbox state.
+# 2. Dangerous commands: force/delete pushes, gh writes, docker — always
+#    prompt regardless of sandbox state.
 import sys
 import json
 import re
@@ -38,7 +38,7 @@ SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
 
 # Shell metacharacters that can't be safely decomposed by splitting:
 # command substitution and grouping ( $(...), backticks, (), {} ), redirects
-# ( <, > ), and newlines. Statement separators (&& and ;) and pipes (|) are
+# ( <, > ), and newlines. Statement separators (&&, ||, ;) and pipes (|) are
 # deliberately NOT here — they're decomposed below and each part is vetted
 # individually, so a `;`-chain is approved iff every one of its parts would be
 # approved on its own (the same treatment && already gets).
@@ -105,6 +105,8 @@ ASK_ALWAYS_PATTERNS = [
 # Read-only gh patterns — safe even unsandboxed
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
+    # gh pr checks: the PR's status-check rollup — read-only.
+    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pr\s+checks\b",
     # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
     # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms.
     # Method match is case-insensitive — `gh api -X post` / `--method=patch` reach GitHub as writes too.
@@ -182,10 +184,9 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^cat\s*$",
 ]
 
-# Commands that genuinely need network + keyring — must run with bypass.
-# Inside the sandbox these are denied with a clear message instead of being
-# allowed and then failing opaquely at runtime.
-NEEDS_UNSANDBOXED_PATTERNS = [
+# Network git/gh commands. The sandbox reaches GitHub, so inside it they get
+# the same verdict as unsandboxed: SAFE_UNSANDBOXED → allow, anything else → ask.
+NETWORK_PATTERNS = [
     r"^gh\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
@@ -193,10 +194,9 @@ NEEDS_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
 ]
 
-# Patterns that are denied with a custom message rather than the generic
-# NEEDS_UNSANDBOXED bypass advice. Used for variants where the right answer
-# is "run a SAFER form of the same command". Checked BEFORE ASK_ALWAYS,
-# SAFE_UNSANDBOXED, and NEEDS_UNSANDBOXED — match wins regardless of
+# Patterns that are denied with a custom message. Used for variants where the
+# right answer is "run a SAFER form of the same command". Checked BEFORE
+# ASK_ALWAYS, SAFE_UNSANDBOXED, and NETWORK_PATTERNS — match wins regardless of
 # sandbox state.
 DENY_WITH_ADVICE_PATTERNS = [
     (
@@ -287,9 +287,19 @@ _SAFE_BIN_PREFIXES = (
 )
 
 
+# `retry.sh [-n N] [-d S] [--] cmd...` re-runs cmd verbatim, so the wrapper is
+# stripped and cmd judged exactly as if run bare. Home-rooted paths only (a
+# PATH-resolved or /tmp `retry.sh` could be anything), optionally via `bash`.
+_RETRY_PREFIX = re.compile(
+    r'^(?:bash\s+)?(?:~|/home/[^/\s]+|/root)/\.claude/scripts/retry\.sh'
+    r'(?:\s+-[nd]\s+\S+)*(?:\s+--)?\s+'
+)
+
+
 def normalize_cmd(raw):
-    """Strip leading env var assignments and command/env prefixes,
-    resolve absolute paths under standard system bin dirs to basenames.
+    """Strip leading env var assignments, command/env prefixes and a trusted
+    retry.sh wrapper, resolve absolute paths under standard system bin dirs to
+    basenames.
 
     Paths outside the standard bin dirs (e.g. `/tmp/foo`, `/home/u/bin/foo`)
     keep their full prefix — otherwise an attacker placing a same-named
@@ -307,6 +317,9 @@ def normalize_cmd(raw):
         if re.match(r'^(command|env)\s+', s):
             s = re.sub(r'^(command|env)\s+', '', s)
             changed = True
+        if _RETRY_PREFIX.match(s):
+            s = _RETRY_PREFIX.sub('', s, count=1)
+            changed = True
     # Resolve absolute paths under standard bin dirs: /usr/bin/git → git.
     # Other absolute paths (e.g. /tmp/foo) are left untouched.
     parts = s.split(None, 1)
@@ -317,16 +330,17 @@ def normalize_cmd(raw):
 
 
 def split_statements(cmd):
-    """Split a command into statements on `&&` and `;` outside of quotes.
+    """Split a command into statements on `&&`, `||`, and `;` outside of quotes.
     Returns the list of statement parts, or None if the command can't be
     safely split — a single `&` (background execution) or unbalanced quotes.
 
-    `;` and `&&` are both plain statement separators here; each resulting part
-    is vetted independently by evaluate_single_cmd, so a `;`-chain is approved
-    iff every part would be approved on its own. `|` is left intact inside each
-    part — pipes are handled downstream by strip_safe_pipes. Command
-    substitution / grouping ( $(...), backticks, (), {} ) never reaches this
-    splitter — it's rejected earlier by the UNSAFE_META check when unsandboxed."""
+    `;`, `&&`, and `||` are all plain statement separators here; each resulting
+    part is vetted independently by evaluate_single_cmd, so the chain is approved
+    iff every part would be approved on its own (`A || B` runs B when A fails, so
+    B must be allowed too). A single `|` (pipe) is left intact inside each part —
+    handled downstream by strip_safe_pipes. Command substitution / grouping
+    ( $(...), backticks, (), {} ) never reaches this splitter — it's rejected
+    earlier by the UNSAFE_META check when unsandboxed."""
     parts = []
     current = []
     in_single = False
@@ -349,6 +363,17 @@ def split_statements(cmd):
             else:
                 # Single & (background) — not safe to decompose
                 return None
+        elif c == '|' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '|':
+                # `||` (or-else) — statement separator; each part vetted
+                # independently, same as `&&`/`;`.
+                parts.append(''.join(current).strip())
+                current = []
+                i += 2
+                continue
+            else:
+                # Single `|` (pipe) — left intact; strip_safe_pipes handles it.
+                current.append(c)
         elif c == ';' and not in_single and not in_double:
             parts.append(''.join(current).strip())
             current = []
@@ -628,9 +653,6 @@ def strip_safe_pipes(cmd):
     return pipe_parts[0]
 
 
-NEEDS_UNSANDBOXED = "This command needs unsandboxed access. Use dangerouslyDisableSandbox: true"
-
-
 def evaluate_single_cmd(cmd_str, unsandboxed):
     """Evaluate a single (non-compound) command. Returns
     ("allow", None), ("ask", reason), or ("deny", reason)."""
@@ -658,21 +680,19 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     # Check always-dangerous patterns (git push --force, docker)
     for pattern in ASK_ALWAYS_PATTERNS:
         if re.match(pattern, normalized):
-            if unsandboxed:
-                return ("ask", f"Dangerous operation: {stripped[:120]}")
-            return ("deny", NEEDS_UNSANDBOXED)
+            return ("ask", f"Dangerous operation: {stripped[:120]}")
+
+    safe = any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS)
 
     # If bypassing sandbox, only allow known-safe commands
     if unsandboxed:
-        for pattern in SAFE_UNSANDBOXED_PATTERNS:
-            if re.match(pattern, normalized):
-                return ("allow", None)
+        if safe:
+            return ("allow", None)
         return ("ask", f"Sandbox bypass: {stripped[:120]}")
 
-    # Network/keyring commands inside sandbox: deny with clear bypass instruction
-    for pattern in NEEDS_UNSANDBOXED_PATTERNS:
-        if re.match(pattern, normalized):
-            return ("deny", NEEDS_UNSANDBOXED)
+    # Network git/gh inside the sandbox: same gate as unsandboxed (gh writes ask)
+    if any(re.match(p, normalized) for p in NETWORK_PATTERNS) and not safe:
+        return ("ask", f"Network operation: {stripped[:120]}")
 
     # Everything else is contained by the sandbox
     return ("allow", None)

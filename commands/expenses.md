@@ -62,6 +62,10 @@ Click the "Meetup+ receipts" tab. Find the matching row and click the download i
 This opens an HTML invoice on S3 (invoicestaxamo.s3.amazonaws.com). Convert to PDF with:
   google-chrome --headless --disable-gpu --print-to-pdf="<dest>.pdf" --no-sandbox "<s3-url>"
 (Must run with dangerouslyDisableSandbox: true)
+Shortcut: instead of clicking the icon, grab the row's link href via javascript_tool
+(document.querySelectorAll('a') filtered on 'taxamo'; rows are in date order, hrefs end in
+base64-encoded INV numbers) — an invoice.taxamo.com/api/v1/transactions/.../invoice URL that
+headless Chrome can render to PDF directly, no new tab needed.
 
 # Doubleword (statement shows "Doubleword (tytn Ltd)"; LLM inference credits)
 https://app.doubleword.ai/billing
@@ -75,11 +79,17 @@ Lands in ~/Downloads as Receipt-<n>.pdf; then mv/rename.
 
 # SonarSource / SonarCloud (sonarsource.com)
 https://sonarcloud.io/organizations/motleyai/billing
-Requires sign-in (GitHub SSO; ask the user). Dismiss the cookie banner (Reject All) first or clicks won't register.
+Requires sign-in (GitHub SSO — clicking the GitHub button on /login can pass through silently with an
+active GitHub session; only ask the user if GitHub prompts). Dismiss the cookie banner (Reject All) first
+if shown, or clicks won't register.
+If the page stays blank white (empty #root, no console errors): check read_network_requests — JS chunks
+(vendor/lodash/utils-*.js) can return cached 503s. Fix in javascript_tool: fetch each failed chunk with
+{cache:'reload'}, then location.reload().
 "Edit in customer portal" is a button under the "Payment settings" TAB (not Plan overview) — it opens the
 Stripe billing portal at billing.sonarsource.com in the same tab (wait for the dimmed loading state to finish).
 Find the invoice row matching the date/amount and click it (click the amount text, not via ref) — it opens
-the Stripe invoice page in a new tab. Click "Download receipt" there; lands in ~/Downloads as Receipt-<n>.pdf.
+the Stripe invoice page in a new tab. If that tab hangs on its spinner, location.reload() fixes it.
+Click "Download receipt" there; lands in ~/Downloads as Receipt-<n>.pdf.
 
 # GitKraken
 https://gitkraken.dev/subscription

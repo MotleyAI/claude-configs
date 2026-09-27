@@ -78,7 +78,23 @@ Why summary `updated_at` and not other signals:
 - **Line-level review comments (`pulls/N/comments`)**: only exist when there are findings; on a clean PR they never appear, so polling them would always hit the 10-minute cap.
 - **Summary `updated_at`**: advances on every CodeRabbit pass (whether it found anything or not), is monotonic with respect to HEAD, and is set after the bot has finished posting line-level threads (the summary is the last thing the bot writes).
 
-Once the script exits, proceed to Step 1.
+**Don't idle while the script runs.** Run it in the background, and on each of
+its progress polls check which sources are already terminal. Fetch and triage
+those at once (Steps 1–4 for that source), without waiting for the rest:
+- CodeRabbit once its StatusContext is done,
+- Sonar once the SonarCloud check is done,
+- each CI job's failure log as soon as that job fails.
+
+Only Step 5, the fix plan, waits for the script to exit, so the plan covers
+every source. When it exits, re-fetch CodeRabbit to pick up late threads.
+
+**CodeRabbit rate limit (script exit 3).** If CodeRabbit has already posted at
+least one real review on this PR (on any earlier HEAD), a rate-limited later pass
+is NOT a blocker. Treat CodeRabbit as done for this HEAD, fetch and triage its
+existing threads, and carry on without re-triggering. Only when there has never
+been a real review on the PR does the rate limit block, and then you report it.
+
+Once the script exits, finish Step 1 for any source not yet fetched.
 
 ### 1. Fetch all unresolved feedback (in parallel)
 
@@ -94,7 +110,7 @@ Once the script exits, proceed to Step 1.
 
   If `mcp__sonarqube__*` tools are not registered in this session, stop and ask the user to load the MCP — do not fall back to the CLI or `gh api`.
 - **Failed CI** — invoke the `fetch-failed-pr-checks` skill (script: `~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh <PR>`). Read its JSON for the failed checks plus failed-step log excerpts.
-- **Conventions gate (deterministic)** — run `bash ~/.claude/skills/process-reviews/scripts/check-conventions.sh <PR>` from the repo root (needs network for the base-branch lookup — `dangerouslyDisableSandbox: true`). It AST-checks the PR's modified `.py` files (WHOLE file, committed ∪ working tree) for `[import-not-top]`: no imports inside functions/classes, no module-level imports after non-import code; module-level `if TYPE_CHECKING:` / optional-dep `try:` import wrappers are fine. Exit 0 = clear, 1 = RED with one `file:line: [rule] message` per finding, 2 = usage/git error. This is a HARD GATE: the loop is not done while it is RED. (A kwarg-usage check is deliberately NOT part of this gate — the user will add one later on a language-server basis.)
+- **Conventions gate (deterministic)** — run `bash ~/.claude/skills/process-reviews/scripts/check-conventions.sh <PR>` from the repo root, BARE: NEVER pass `dangerouslyDisableSandbox` (the script is in `sandbox.excludedCommands`, so it gets network automatically; passing the flag is what causes a permission prompt). The same applies to every `~/.claude/skills/*/scripts/*.sh` helper in this flow. It AST-checks the PR's modified `.py` files (WHOLE file, committed ∪ working tree) for `[import-not-top]`: no imports inside functions/classes, no module-level imports after non-import code; module-level `if TYPE_CHECKING:` / optional-dep `try:` import wrappers are fine. It also enforces `[text-ratio]`: text-only lines (docstring/standalone-string lines + comment-only lines) must be ≤15% of total lines, aggregated separately over the PR's test files and its source files (`--text-ratio-cap` on check-conventions.py to adjust). Exit 0 = clear, 1 = RED with findings on stdout (one `file:line: [rule] message` per import finding; a `[text-ratio]` block per breached group listing per-file ratios worst-first), 2 = usage/git error. This is a HARD GATE: the loop is not done while it is RED. (A kwarg-usage check is deliberately NOT part of this gate — the user will add one later on a language-server basis.)
 
 Run the three GitHub-side fetches and the conventions gate in parallel — they're independent. Codex is already done (Step 0). Inside SonarQube, the gate-status call comes first so you know which secondary tools (duplications / coverage / hotspots) are actually load-bearing; everything else can run in parallel.
 
@@ -122,7 +138,7 @@ For each entry, classify as VALID or INVALID using a source-appropriate signal:
 
 - **CodeRabbit / Sonar / Codex** — READ the cited file at the cited line(s). Apply the user's global rules from `~/.claude/CLAUDE.md` (trust internal code, validate only at boundaries; imports at the top; etc.). Lean toward VALID when uncertain — false positives are easier to defend later than missed bugs now. Over-verbose comments/docstrings in the diff (design essays, ticket-ID-on-every-line, code-restating comments, name-echo docstrings) are a valid maintainability finding per the `concise-comments` skill — flag them even if no bot did.
 - **CI failure** — READ the failed-step log excerpt in the JSON. Classify as INVALID only when the failure is clearly unrelated to this PR's changes (network blip / runner died / well-known flaky test that the user has previously confirmed is flaky / out-of-date Action that times out before doing anything). Otherwise VALID. **A test failure that points at code this PR touched is always VALID** — don't argue your way out of it.
-- **Conventions** — always VALID (the check is deterministic; there is nothing to second-guess). The fix is hoisting the import to module top; only a genuine circular import may instead get a reasoned waiver comment on the flagged line (`# ALLOW(import-not-top): <reason>`), and per the user's CLAUDE.md you must CONFIRM WITH THE USER before landing a waiver. Severity `minor`, `rule` = the bracketed rule name, `ref` = `null`.
+- **Conventions** — always VALID (the check is deterministic; there is nothing to second-guess). For `[import-not-top]` the fix is hoisting the import to module top; only a genuine circular import may instead get a reasoned waiver comment on the flagged line (`# ALLOW(import-not-top): <reason>`), and per the user's CLAUDE.md you must CONFIRM WITH THE USER before landing a waiver. For `[text-ratio]` the fix is trimming comments/docstrings in the touched files (follow the `concise-comments` skill) until the group fits under the cap — there is no per-line waiver; but NEVER trim files whose docstrings are outward-facing (MCP tool servers, CLI `--help`, OpenAPI routes; specific files in project memory) — trim the other touched files instead, unless the user requests such a file by name. Severity `minor`, `rule` = the bracketed rule name, `ref` = `null`.
 
 Codex-specific validation hazards (apply on top of the shared CodeRabbit/Sonar rules):
 

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Hard-reject Claude co-author trailers, then chain to the repo's own commit-msg hook.
+if grep -v '^#' "$1" | grep -qiE 'co-?authored[- ]by.*(claude|anthropic)|noreply@anthropic\.com'; then
+    echo "commit-msg: rejected — message contains a Claude/Anthropic co-author line." >&2
+    exit 1
+fi
+repo_hook="$(git rev-parse --git-common-dir)/hooks/commit-msg"
+if [ -x "$repo_hook" ]; then
+    exec "$repo_hook" "$@"
+fi

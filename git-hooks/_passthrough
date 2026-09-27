@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Global core.hooksPath shadows .git/hooks; forward to the repo's own hook if present.
+repo_hook="$(git rev-parse --git-common-dir)/hooks/$(basename "$0")"
+if [ -x "$repo_hook" ]; then
+    exec "$repo_hook" "$@"
+fi

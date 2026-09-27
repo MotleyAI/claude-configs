@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Deterministic convention gate driver for /process-reviews: resolves the PR's
-# base branch, then runs check-conventions.py (imports-at-top) on the PR's
-# modified .py files (whole file, committed ∪ working tree).
+# base branch, then runs check-conventions.py (imports-at-top + text-ratio) on
+# the PR's modified .py files (whole file, committed ∪ working tree).
 #
 # EXIT CODES:  0 gate clear · 1 gate RED (violations on stdout) · 2 usage/git error
 #
 # Usage:
 #   check-conventions.sh <PR_NUMBER> [--repo OWNER/REPO] [--base BRANCH]
 #
-# Needs network (gh + git fetch) — invoke with dangerouslyDisableSandbox: true.
+# In sandbox.excludedCommands — call BARE; passing dangerouslyDisableSandbox causes the permission prompt.
 
 set -euo pipefail
 
@@ -71,9 +71,12 @@ if [[ $status -eq 0 ]]; then
 fi
 if [[ $status -eq 1 ]]; then
     echo
-    echo "gate: RED — hoist each flagged import to module top. Only a genuine"
-    echo "circular import may be waived with '# ALLOW(import-not-top): <reason>'"
-    echo "on the line — and per the user's CLAUDE.md, confirm with the user"
-    echo "BEFORE landing a waiver."
+    echo "gate: RED —"
+    echo "  [import-not-top] hoist each flagged import to module top. Only a"
+    echo "    genuine circular import may be waived with"
+    echo "    '# ALLOW(import-not-top): <reason>' on the line — and per the"
+    echo "    user's CLAUDE.md, confirm with the user BEFORE landing a waiver."
+    echo "  [text-ratio] trim comments/docstrings in the flagged file group"
+    echo "    until text-only lines fit under the cap (no per-line waiver)."
 fi
 exit "$status"

@@ -24,6 +24,9 @@ make sure you ALWAYS add solid test coverage for it, adding tests in the appropr
 - Whenever you do any changes to the code, afterwards run the FULL test suite for that repository, 
 except integration tests, and fix any that fail.
 Don't just run the tests that you think are relevant, run ALL the non-integration tests every time after changing any code in a repo.
+- ALWAYS re-run a Jupyter notebook after editing ANY of its cells, and save the executed outputs 
+(e.g. `jupyter nbconvert --to notebook --execute --inplace <nb>`). NEVER hand-edit a notebook's stored 
+outputs or leave them stale — the committed outputs must be the real result of running the current cells.
 - Do NOT pay me any compliments. If you think the instructions I give are not the best idea, and 
 you have a suggestion on how to achieve the same goal better, fell free to suggest it, but only once.
 If I then tell you to proceed with my original instructions, do not question me again. 
@@ -70,15 +73,20 @@ need, extend the skill rather than reaching for `gh` directly.
 
 NEVER mention Linear issues in docstrings or docs (apart from the architecture folder and if subfolders, if these exist)
 
+NEVER refer to issue numbers (e.g. DEV-1234) anywhere in code — comments, docstrings, or
+identifiers — with ONE exception: a FUTURE issue that will fix or unlock something (a
+forward pointer) is allowed. Remove any non-forward issue-number reference whenever you
+come across it in code you touch. (The architecture/ folder and OpenSpec change/spec docs
+are docs, not code, and keep their issue references.)
+
 Always keep docstrings as CONCISE as possible!!!
 
 If a tool you're supposed to use, such as Perplexity or Linear MCP, doesn't work, NEVER EVER try to improvise around it. 
 Instead, stop and ask me to fix it. 
 
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
-**Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
-`dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox
-blocks, and running them sandboxed first will be denied by the PreToolUse hook.
+This includes `gh` and network `git` (`fetch`/`push`/`pull`/`ls-remote`): they work sandboxed (keyring auth included),
+and the PreToolUse hook gives them the same verdict as unsandboxed (reads allowed, writes/force-pushes ask).
 
 NEVER EVER add a commit comment like "Co-authored by Claude Code" - you're just a hired grunt, I'm the author
 When merging anything into a branch, commit local changes then merge, NEVER STASH NEVER REBASE
@@ -86,3 +94,5 @@ When merging anything into a branch, commit local changes then merge, NEVER STAS
 When running `git merge -m`, the message's first line MUST contain the merged ref in
 single quotes, e.g. `Merge branch 'origin/main' ...` — GitKraken crashes and refuses to
 open the repo/worktree while a merge whose MERGE_MSG lacks a 'quoted' ref sits uncommitted.
+
+- NEVER EVER create, cancel, or delete a Linear issue (or any other tracker issue) without asking me first and getting an explicit yes for that specific issue — this includes "follow-up" or "deferral" issues for gaps you discover mid-task. Before proposing one, search Linear for an existing issue covering it and cite what you found.

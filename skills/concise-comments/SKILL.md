@@ -12,7 +12,7 @@ Keep a comment only if a competent reader of THIS codebase couldn't infer it fro
 
 ## For / not for
 For: the non-obvious *why* (constraint, invariant, footgun, edge-case gotcha) and a one-line *what* on public APIs.
-Not for: design narrative, alternatives-considered, defending the approach, repro steps, byte-count walkthroughs, ticket history, or restating the code. Those go in the PR description, DECISIONS.md, the issue, or a test.
+Not for: design narrative, alternatives-considered, defending the approach, repro steps, byte-count walkthroughs, ticket history, or restating the code. Those go in the PR description, the issue, or a test.
 
 ## Limits (defaults; exceed only with a stated reason)
 - Inline comment: 1 line. Needing 3+ lines to justify a line of code → rename things or move the rationale out.
@@ -34,6 +34,7 @@ Keep, as ≤1 line: a real cross-dialect/edge gotcha, a non-obvious invariant, a
 
 ## The pass (`/concise-comments`)
 1. Scope: default to the branch diff (`git diff $(git merge-base <base> HEAD) -- '*.py'`); or the path/file the user names. Only added/modified comments unless told to sweep.
+   Hard exclusion: files whose docstrings are outward-facing (MCP tool servers, CLI `--help` commands, OpenAPI route handlers) — leave the whole file alone unless the user requests it by name; check project memory for the specific files.
 2. Edit comments/docstrings ONLY — never code, string literals, test data, asserts, imports, markers.
 3. Verify: run affected tests + linter (green); confirm `git diff` changed no code line; measure before/after with `scripts/count_comments.py --range <mergebase> <paths>`.
 4. Report per-file and total lines before → after + ratio, and that tests/lint pass.

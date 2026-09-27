@@ -28,7 +28,7 @@
 # Usage:
 #   lint-modified-imports.sh <PR_NUMBER> [--repo OWNER/REPO] [--base BRANCH]
 #
-# Needs network (gh + git fetch) — invoke with dangerouslyDisableSandbox: true.
+# In sandbox.excludedCommands — call BARE; passing dangerouslyDisableSandbox causes the permission prompt.
 
 set -euo pipefail
 

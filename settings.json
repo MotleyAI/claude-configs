@@ -1,4 +1,8 @@
 {
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "allow": [
       "Agent(*)",
@@ -37,6 +41,8 @@
       "Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
       "Bash(bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
       "Bash(~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
+      "Bash(bash ~/.claude/skills/process-reviews/scripts/check-conventions.sh:*)",
+      "Bash(~/.claude/skills/process-reviews/scripts/check-conventions.sh:*)",
       "Bash(bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
       "Bash(~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
       "Bash(cat <<*reply-invalid-coderabbit.sh*)",
@@ -62,9 +68,16 @@
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)"
-    ]
+    ],
+    "defaultMode": "acceptEdits",
+    "disableAutoMode": "disable"
   },
-  "model": "fable",
+  "availableModels": [
+    "opus-4-8",
+    "sonnet",
+    "haiku",
+    "fable"
+  ],
   "hooks": {
     "PermissionRequest": [
       {
@@ -116,6 +129,16 @@
             "type": "command",
             "command": "'/home/james/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh'",
             "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/block_claude_attribution.py",
+            "timeout": 10
           }
         ]
       }
@@ -213,8 +236,14 @@
     },
     "excludedCommands": [
       "bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh",
+      "bash ~/.claude/skills/process-reviews/scripts/check-conventions.sh",
       "bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh",
+      "bash ~/.claude/skills/process-reviews/scripts/lint-modified-imports.sh",
+      "bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh",
+      "bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh",
+      "bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh",
       "gh pr list",
+      "gh pr checks",
       "env -u SSH_AUTH_SOCK uv run python",
       "env -u SSH_AUTH_SOCK git push",
       "env -u SSH_AUTH_SOCK git pull",
@@ -235,33 +264,11 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
-  "autoUpdatesChannel": "stable",
-  "theme": "dark",
-  "autoMode": {
-    "environment": [
-      "### Org-wide",
-      "**Organization**: MotleyAI (git remote github.com:MotleyAI/storyline.git)",
-      "**Cloud provider(s)**: Google Cloud (Cloud Run, Cloud SQL, Artifact Registry, Secret Manager, Cloud Tasks) per CLAUDE.md/README",
-      "**Repository visibility**: private (gh API authoritative for MotleyAI/storyline)",
-      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
-      "**Secrets management**: Google Cloud Secret Manager (gcloud secrets markers found); CI secrets referenced by name only: ANTHROPIC_API_KEY, DAILY_SLACK_REPORT_TOKEN, DEMO_REFRESH_TOKEN, GITHUB_TOKEN",
-      "**Default / protected branches**: default main; Protected branches: none listed via gh (rulesets not queryable here) — CONTRIBUTING states no direct pushes to main, PRs only, main auto-deploys to staging",
-      "**CI/CD deploy targets**: GitHub Actions single workflow (.github/workflows/ci.yml); build/push images to Google Artifact Registry, deploy to Cloud Run; push to main deploys to staging",
-      "**Network posture**: None configured",
-      "**Source control**: GitHub org MotleyAI; this repo origin github.com:MotleyAI/storyline.git",
-      "**Trusted internal domains**: None configured",
-      "**Trusted cloud buckets**: None configured",
-      "**Key internal services**: local API http://localhost:8000, CubeJS http://localhost:4000, Postgres/pgvector :5432 (local dev); Clerk auth backend",
-      "**Internal package registry**: Google Artifact Registry (container images)",
-      "**Sensitive data locations & audiences**: .env / .env.template / .env.compose (OPENAI_API_KEY etc.), db_credentials.sh (remote DB creds), Google Secret Manager dotenv_compose secret; regulated business/customer analytics data flowing through the semantic layer — share only with audiences cleared at the [named+specifics] bar",
-      "**Data retention / declassification**: None configured",
-      "**Sensitive remote targets**: any namespace, host, or container whose name carries prod or production as a whole word or name segment; note main->staging auto-deploy",
-      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
-      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries prod or production as a whole word or name segment",
-      "### User-specific",
-      "**Primary use of Claude Code**: software development (Storyline backend — Python/FastAPI semantic-layer platform)",
-      "**Trusted repo**: the git repository the agent started in (this storyline worktree) and its configured remote origin github.com:MotleyAI/storyline.git — private, so confidential material is fine here; content ported or first read from outside this session's repo is not its own work",
-      "**Org-specific CLIs**: poetry, gh, docker, migrate.py; skill scripts under ~/.claude/skills (fetch-coderabbit-threads, reply-to-pr-thread, fetch-failed-pr-checks)"
-    ]
-  }
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "autoUpdatesChannel": "latest",
+  "theme": "dark"
 }

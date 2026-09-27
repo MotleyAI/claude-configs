@@ -1,38 +1,145 @@
 ---
 name: spec
-description: Guide for creating better specs for tasks I give to an agent. Always pulls in the Linear issue whose `gitBranchName` matches the current git branch exactly, and combines it with whatever I type when invoking the skill.
+description: Guide for creating better specs for tasks I give to an agent. Always pulls in the Linear issue whose `gitBranchName` matches the current git branch exactly, and combines it with whatever I type when invoking the skill. Rehydrates context, detects the current stage, and dispatches to the stage skills spec-plan → spec-tests → spec-implement → spec-review.
 ---
 
-I want a detailed spec. The brief is the union of:
-1. The Linear issue tied to the current branch (see Step 1), AND
+I want a detailed spec-driven flow. The brief is the union of:
+1. The Linear issue tied to the current branch (see "Rehydrate" below), AND
 2. Whatever I just typed when invoking this skill.
 
-## Stopping policy — read this first
+## The four stages
 
-This flow has **exactly three mandatory hard stops** so I can reset your context.
-Everything you need at each is already on disk, so a fresh session resumes from
+The flow runs as four stage skills in this fixed order, and I reset the
+session (`/clear`) between stages. Each stage ends at a hard stop; everything
+a fresh session needs is on disk or in Linear, so any stage can resume from
 just the branch name:
 
-1. **Before tests** — before Step 4
-2. **Before implementation** — before Step 6
-3. **Immediately after the PR is created** — in Step 7, before the `/process-reviews` loop
+1. **`spec-plan`** — interview me, Codex-review the plan, emit the
+   OpenSpec change (OpenSpec repos only), make the plan durable.
+   Ends at 🛑 reset point 1 (before tests).
+2. **`spec-tests`** — write the full failing test suite for the plan,
+   Codex-review the tests against the plan.
+   Ends at 🛑 reset point 2 (before implementation).
+3. **`spec-implement`** — implement until every test passes, then (with my
+   go-ahead) commit, push, and open the PR.
+   Ends at 🛑 reset point 3 (just after the PR is created).
+4. **`spec-review`** — run `/process-reviews` until converged, then
+   archive the OpenSpec change (OpenSpec repos only) so I can merge.
 
-At each: say we're at that reset point, then STOP and wait — do not start the next
-phase. I'll `/clear` and return with "continue on branch `<BRANCH>`"; you rehydrate
-by re-running Step 1 and reading the change folder (and the Linear issue).
+This skill does NO stage work itself. It only: rehydrates context (below),
+detects which stage we're at, and invokes that stage's skill via the Skill
+tool. Run exactly ONE stage per session — when its hard stop is reached, STOP;
+never chain into the next stage, even if it looks quick.
 
-**Between the stops, run autonomously — do NOT stop or ask permission to proceed.**
-The only other permitted pauses are:
-- the **Step 2 interview** (its whole point is questioning me);
+## Stopping policy
+
+Each stage skill ends with its own **hard stop** so I can reset your context.
+At a hard stop: say which reset point we're at, then STOP and wait — do not
+start the next stage. I'll `/clear` and re-invoke `/spec` (possibly with
+"continue on branch `<BRANCH>`"); rehydration + stage detection below take it
+from there.
+
+**Within a stage, run autonomously — do NOT stop or ask permission to
+proceed.** The only other permitted pauses are:
+- the **`spec-plan` interview** (its whole point is questioning me);
 - a **nontrivial design decision** — a real fork with more than one reasonable
-  option — raised with explicit PROS/CONS + RECOMMENDATION (Step 2 rule). A choice
-  with an obvious default is NOT this: take the default and move on;
-- the standing **go-ahead gate before commit/push/PR** (Step 7), per my global rules.
+  option — raised with explicit PROS/CONS + RECOMMENDATION (per the interview
+  rule in `spec-plan`). A choice with an obvious default is NOT this:
+  take the default and move on;
+- the standing **go-ahead gate before push/PR** (`spec-implement`), per my
+  global rules;
+- a **suspected unrelated gap** — a failure, restriction, or missing capability
+  that looks pre-existing or outside this change's scope (a bind-level refusal, an
+  allowlist, a fixture that cannot express a scenario, …). Whether it is unrelated
+  and what to do about it is MY call, never yours: STOP and ask, presenting what
+  you found, the existing Linear issues you searched for (search first, cite ids
+  and titles), and the options (treat as in-scope / xfail against an EXISTING issue
+  / narrow the scenario) with a recommendation. NEVER create a Linear issue, mark a
+  scenario xfail, or narrow a scenario on your own to route around it — even when a
+  tasks.md line or an earlier plan says "file its own issue".
 
 Never stop just to report progress, to confirm an obvious next step, or to ask
 something you can determine yourself.
 
-## Step 1 — Pull in the Linear issue for the current branch
+## The plan is frozen once spec-plan ends
+
+The plan — the OpenSpec change folder (proposal, design, tasks, delta specs) or,
+without OpenSpec, the finalized-plan comment on the Linear issue — is MINE once
+`spec-plan` reaches its hard stop. In EVERY later stage, NEVER change it without
+my explicit confirmation of the exact edit: no added or amended decisions, no
+rewritten or added scenarios, no "corrections" after a probe, no re-scoping, no
+notes folded into tasks. If a stage finds the plan wrong, incomplete, or
+contradicted by an axiom or a probe, STOP, present the exact proposed diff with
+the reason, and wait. The one self-serve edit is flipping a task's `[ ]` to `[x]`
+when it was completed exactly as written.
+
+## Nothing the next stage needs lives in chat
+
+Sessions `/clear` between stages, so the stop message reaches no future stage.
+Anything the next stage must know therefore has to be **persisted where that
+stage will discover it naturally** during its own rehydration and work — NEVER a
+turn-final "heads-up", "note for next time", "FYI for spec-implement", or a
+caveat tacked onto the stop message. Such text is gone the instant I `/clear`, so
+it only masquerades as a hand-off. If you catch yourself about to write one,
+STOP and put it in one of these instead:
+
+- **tasks.md** — an open sub-task, a gotcha, or a calibration note on a step
+  (the next stage works through this file);
+- **design.md / proposal.md / the spec delta** — a decision, rationale, or a
+  constraint on how something must be built;
+- **the Linear issue** — the spec in the body, resume state and probe outcomes
+  in a handoff comment;
+- **the code itself** — a test's assertions plus a terse comment, or a
+  forward-pointer issue (per my global rules) — for anything about how the code
+  must behave.
+
+A hard stop then states only which reset point we're at: everything the next
+stage needs is already on disk or in Linear, by construction.
+
+## Commit at the end of every stage
+
+At each stage's hard stop — after the stage's work is done, just before you
+STOP — commit the files that stage created or changed, **without asking**. This
+is a `/spec`-flow override of my global "don't commit, I'll commit" / "ask me
+each time" rules, and it supersedes any "do NOT commit" wording in the stage
+skills. What still holds:
+
+- Stage with **specific named paths** (`git add <path>`, one at a time) — NEVER
+  `git add -A`, `git add .`, or a whole directory.
+- **Commit only** — pushing and opening the PR still need my explicit go-ahead
+  (`spec-implement` Step 3 / the stopping policy above); the end-of-stage
+  commit does not.
+
+## Normative harnesses (living-architecture repos)
+
+In a repo with an `architecture/` directory at its root,
+`architecture/**/*.arc42.md` and `architecture/**/*.c4` files are normative
+harnesses, exactly like tests. This applies at EVERY stage of the flow —
+planning, writing tests, implementing, and fixing review findings:
+
+- **Read them first.** Before doing the stage's work, read
+  `architecture/index.yaml` plus **every** `*.arc42.md` file relevant to the
+  modules the change touches — the node file of each touched node AND
+  `system.arc42.md` (cross-cutting principles) — plus the LikeC4 view of every
+  touched node (see the `living-architecture` skill).
+- **Obey them.** Every plan, test, implementation, and review fix MUST obey the
+  node principles and the model's import law — or explicitly include the
+  model + arc42 update as part of the change.
+- **Flag, never deviate.** If anything in an arc42 file seems wrong,
+  contradictory, or makes the task impossible or substantially harder, FLAG IT
+  TO ME EXPLICITLY and wait for my call — NEVER silently deviate from,
+  reinterpret, or ignore a principle, and never produce work that quietly
+  conflicts with one.
+- **Keep them normative and minimal.** When work strains a principle, first make
+  the code comply; propose an edit only when the principle genuinely forbids
+  something needed, in the smallest general wording — never descriptive text or
+  implementation detail (function names, mechanisms).
+- **Never edit without per-change approval.** NEVER create, modify, or delete
+  one without my explicit approval for each specific change — present the
+  exact edit and wait for my OK. A broader approved plan that mentions the
+  edit does NOT count; the concrete edit itself needs the OK.
+
+## Rehydrate — pull in the Linear issue for the current branch
 
 Look up the Linear issue whose `gitBranchName` equals the current git branch
 **exactly**. I create branches by clicking "Copy git branch name" in the
@@ -66,170 +173,36 @@ byte-equal to the issue's `gitBranchName`. That equality is the join key.
      repo for OpenSpec now (one-time) or run this change without it. If yes,
      invoke the **`openspec-init`** skill (it resolves the CLI and scaffolds the
      corpus), then set `OPENSPEC=1`. If no, set `OPENSPEC=0`.
-   - When `OPENSPEC=0`, skip every step below marked *"OpenSpec repos only."*
+   - When `OPENSPEC=0`, skip everything marked *"OpenSpec repos only"* in the
+     stage skills.
 
-## Step 2 — Combine and interview
+## Detect the stage
 
-Treat the Linear issue body + comments AND whatever I typed in this turn as
-the combined brief. In case of conflict, what I typed has higher priority but ask to be sure. 
+Work out which stage this session should run — first match wins:
 
-Interview me in detail.
-Cover implementation approach, edge cases, gotchas, design choices, tradeoffs, and constraints.
-Skip obvious questions.
-Ask one at a time and build on my answers.
+1. **Open PR for `BRANCH`?** Check with `gh pr view --json state,url`
+   (`gh` runs sandboxed like everything else). If an open PR
+   exists → **`spec-review`**.
+2. **No durable plan yet?** The plan is durable iff:
+   - `OPENSPEC=1`: `openspec/changes/<CHANGE_ID>/` exists and
+     `openspec validate <CHANGE_ID> --strict` passes; or
+   - `OPENSPEC=0`: the Linear issue has a comment containing the finalized
+     plan.
+   If not durable → **`spec-plan`**.
+3. **No tests for this change yet?** Look for test files added/changed for
+   this change: the working tree (`git status`) plus commits since the
+   merge-base with the default branch
+   (`git diff --name-only $(git merge-base HEAD <default-branch>)..HEAD`).
+   If none → **`spec-tests`**.
+4. **Otherwise** → **`spec-implement`** (plan and tests exist, no PR yet;
+   this stage also covers the "all tests already pass, awaiting my
+   commit/push/PR go-ahead" case).
 
-**IMPORTANT — WHENEVER you ask me to make a choice, you MUST give, for the
-decision, explicit PROS and CONS of each option AND a clear RECOMMENDATION of
-which one you'd pick and why. This is non-negotiable. Never present options as
-a bare menu. If you use a structured/multiple-choice prompt, spell out the
-pros, the cons, and the recommendation inside it — do not rely on a one-line
-description to carry them.**
+If the evidence is ambiguous (e.g. test files changed but they don't obviously
+belong to this change), say what you found and ask me which stage to run.
 
-When you think you have enough information, return a detailed, complete spec.
-In the spec you write, NEVER take shortcuts or make simplifications or
-extensions to the original requirements without asking me about each one first.
+## Dispatch
 
-## Step 3 — Codex review of the plan
-
-Once I've approved the spec/plan, hand the plan text to the codex MCP server
-(`mcp__codex__codex`) and ask it to review the plan itself — not a diff —
-focusing on correctness of approach, missed edge cases, risky design choices,
-test coverage gaps, and anything that contradicts the Linear issue. Codex
-should not modify files; it should return actionable findings.
-
-Bring Codex's findings back to me and discuss them. For each finding, decide
-together whether to fold it into the plan, defer it, or reject it. Update the
-written spec to reflect the resolved decisions before moving on.
-
-## Step 3b — Emit the OpenSpec change (OpenSpec repos only)
-
-Skip this whole step unless `OPENSPEC=1` (Step 1). Turn the approved,
-Codex-resolved plan into an OpenSpec change — but do NOT hand-author the files
-from memory. OpenSpec ships authoritative, version-correct, per-artifact
-instructions; follow them so the output passes `validate --strict`.
-
-1. **Scaffold:** `openspec new change <CHANGE_ID>` (creates
-   `openspec/changes/<CHANGE_ID>/.openspec.yaml`; artifacts are added next).
-2. **Author each artifact in dependency order** — proposal → specs → design →
-   tasks. For each, run `openspec instructions <artifact> --change <CHANGE_ID>`
-   and obey the emitted `<instruction>` + `<template>`, writing to the `<output>`
-   path it names. `openspec status --change <CHANGE_ID>` shows what's done/blocked.
-   Most of this is a reformat of the plan — don't re-derive it:
-   - **proposal.md** — `## Why` + `## What Changes` (from the Linear issue +
-     plan), plus `## Capabilities` (New/Modified — this list decides which delta
-     files must exist) and `## Impact`.
-   - **specs/<capability-path>/spec.md** (the delta — the crux) — one file per
-     capability from the proposal, using `## ADDED` / `## MODIFIED` / `## REMOVED`
-     / `## RENAMED Requirements`. A **new** capability's file also needs a
-     `## Purpose` (50+ chars) — omit it for an existing capability, else `archive`
-     stamps a `TBD` placeholder into the corpus. Each requirement is
-     `### Requirement: <name>` in
-     SHALL/MUST language with **≥1** `#### Scenario:` in WHEN/THEN form. Validator
-     gotchas: scenarios need **exactly four** `#` (three or bullets fail
-     silently); MODIFIED must contain the FULL updated requirement; REMOVED needs
-     **Reason** + **Migration**; RENAMED uses FROM:/TO:. These scenarios ARE the
-     Step 4 acceptance criteria.
-   - **design.md** — only for non-obvious design (the Codex-resolved decisions);
-     skip if there's nothing to say.
-   - **tasks.md** — the `- [ ]` checklist that also drives Steps 4/6; maintain it
-     here, not twice.
-3. **No spec-level behaviour change?** (pure refactor, tooling, docs, or a fix
-   that doesn't alter specified behaviour) — do NOT invent a requirement; set
-   `skip_specs: true` in `openspec/changes/<CHANGE_ID>/.openspec.yaml`. Specs
-   describe behaviour, so if behaviour doesn't change, no spec should.
-4. **Gate before writing any tests:**
-
-   ```
-   openspec validate <CHANGE_ID> --strict
-   ```
-
-   Fix until green. This catches a malformed plan and — crucially — any MODIFIED
-   requirement that no longer lines up with the current corpus (spec drift), at
-   plan time, for free.
-
-## Step 4 — Write the tests first
-
-> **🛑 HARD STOP (reset point 1 of 3) — before tests.** First make the plan
-> durable: if `OPENSPEC=1` it's the validated change folder; if `OPENSPEC=0`, post
-> the finalized plan to the Linear issue (a comment) so a reset recovers it via
-> Step 1. Then STOP and wait for my reset — do not start writing tests until I
-> resume.
-
-Following the TDD-style memory (`feedback_tdd_style.md`): land the **full**
-test suite for the agreed plan before writing any implementation. Tests
-should fail for the right reason (feature missing), not for setup reasons.
-
-If `OPENSPEC=1`, derive the test cases from the delta scenarios in
-`openspec/changes/<CHANGE_ID>/specs/<capability>/spec.md` (Step 3b): every
-`#### Scenario:` needs at least one covering test.
-
-## Step 5 — Codex review of the tests against the plan
-
-Hand both the plan (from Step 3, post-discussion) and the new tests to
-`mcp__codex__codex` and ask it to verify that the tests faithfully cover the
-plan: every behavior in the plan has at least one test, edge cases discussed
-in Step 3 are exercised, and no test asserts behavior that contradicts the
-plan. Codex should not modify files.
-
-Bring the findings back to me. Adjust the tests (add, remove, or fix) based
-on what we agree on before writing implementation.
-
-If `OPENSPEC=1`, "the plan" includes the delta specs: verify every ADDED/MODIFIED
-requirement and each of its scenarios has a covering test.
-
-## Step 6 — Implement until tests pass
-
-> **🛑 HARD STOP (reset point 2 of 3) — before implementation.** The finalized
-> failing tests are on disk alongside the plan. STOP and wait for my reset — do
-> not start implementing until I resume.
-
-Implement the plan. Run the full non-integration test suite (per
-`feedback_unit_tests_only.md`) after changes and fix any failures. Do not
-declare done until every test from Step 4/5 passes.
-
-If `OPENSPEC=1`, tick off `openspec/changes/<CHANGE_ID>/tasks.md` as you complete
-each task (the same checklist from Step 3b — this is the `apply` phase, driven by
-TDD here instead of `/opsx:apply`).
-
-When writing code AND tests (Steps 4 and 6), follow the `concise-comments`
-skill: no design essays, ticket-ID-on-every-line, or code-restating comments;
-docstrings to a line. Rationale belongs in the spec / PR description / this
-issue — not in code — so verbose comments never get written in the first place.
-
-## Step 7 — Ask me to commit, push, and PR
-
-Once all tests pass, stop and ask me whether to commit, push, and open a PR.
-Do not do any of these on your own — wait for my go-ahead, then follow the
-standard commit/PR workflow (specific `git add` for each new file, never
-`git add -A`).
-
-If `OPENSPEC=1`, the whole `openspec/changes/<CHANGE_ID>/` folder is part of the
-change — `git add` it explicitly alongside the code (proposal, design, tasks,
-delta specs). Put `openspec show <CHANGE_ID> --diff` output in the PR description
-so reviewers see the spec surface change. Do NOT archive yet — that happens post-merge
-(Step 8).
-
-> **🛑 HARD STOP (reset point 3 of 3) — just after the PR is created.** Code,
-> tests, and the change folder are committed and the PR exists. STOP and wait for
-> my reset before starting the review loop below.
-
-After the reset, call /process-reviews in a loop until there are no more issues to fix.
-
-## Step 8 — Archive the OpenSpec change (OpenSpec repos only, AFTER the PR merges)
-
-Skip unless `OPENSPEC=1`. Archiving folds the delta into the living spec corpus,
-so it must run only once the change is merged/deployed — never at spec time. When
-the PR is merged (i.e. after the Step 7 `/process-reviews` loop settles and I've
-merged), run:
-
-```
-openspec archive <CHANGE_ID>
-```
-
-This merges the delta into `openspec/specs/` (ADDED appended, MODIFIED replaced,
-REMOVED deleted) and moves the change to
-`openspec/changes/archive/YYYY-MM-DD-<CHANGE_ID>/`. Commit the result with
-specific `git add` of the changed `openspec/specs/**` and the moved folder. This
-is the one step that keeps the behaviour corpus current — everything upstream is
-best-effort authoring; `validate` (Step 3b) and `archive` here are the
-deterministic guarantees.
+Tell me in one line which stage was detected and why, then invoke that stage's
+skill via the Skill tool and follow it to its hard stop. If I explicitly named
+a stage when invoking `/spec`, that overrides detection.

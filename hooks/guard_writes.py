@@ -47,27 +47,6 @@ UNSAFE_META = re.compile(r'[`$(){}\n<>]')
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
 
-# Scripts safe enough to receive piped stdin. Full paths only — a
-# basename-only check would let `bash /tmp/reply-to-pr-thread.sh URL`
-# (an attacker-supplied same-named script) bypass the sandbox. The
-# script must be audited and trusted — the pipe target is the *consumer*,
-# so its behavior with arbitrary stdin must be safe.
-SAFE_PIPE_SCRIPT_PATHS = {
-    # reply-to-pr-thread.sh: posts a single PR review-thread reply via
-    # `gh api .../pulls/N/comments/<id>/replies`. The skill description
-    # marks it as "auto-approved globally"; the pipe form would otherwise
-    # trip the unsafe-pipe branch.
-    os.path.expanduser(
-        "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
-    ),
-    # reply-invalid-coderabbit.sh: prepends `@coderabbitai ` and delegates to
-    # reply-to-pr-thread.sh — same blast radius (one PR reply comment). The
-    # process-reviews skill invokes it in the `cat <<'EOF' | bash …` pipe form.
-    os.path.expanduser(
-        "~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh"
-    ),
-}
-
 # tee is allowed as a pipe target when its destinations are all under /tmp/
 # or $TMPDIR — see is_safe_pipe_target.
 SAFE_TEE_FLAGS = {"-a", "--append", "-i", "--ignore-interrupts", "--"}
@@ -150,34 +129,11 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+get-url\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
-    # Skill scripts are auto-allowed only when invoked via `bash` from a
-    # home-rooted path (`~/.claude/...` or `/home/<user>/.claude/...` or
-    # `/root/.claude/...`). The old `\S*` prefix matched any
-    # path ending in `.claude/skills/...`, so `bash /tmp/.claude/skills/...`
-    # was a sandbox-bypass channel. Bare-name forms (no path) were also
-    # dropped — they rely on PATH at exec time, which a malicious entry
-    # earlier in PATH can shadow.
-    #
-    # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
-    # over PR review threads — read-only, no mutations.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads\.sh\b",
-    # fetch-failed-pr-checks.sh: wraps `gh pr view --json statusCheckRollup` +
-    # `gh run view --log-failed`. Read-only, no mutations.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks\.sh\b",
-    # reply-to-pr-thread.sh: POSTs a single review-thread reply via
-    # `gh api -X POST .../pulls/N/comments/<id>/replies`. Auto-approved per
-    # the user's "always allowed" request — mutates GitHub but the blast radius
-    # is one comment, easily deleted via `gh`.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
-    # wait-for-reviews.sh: polls `gh api statusCheckRollup` + PR comments
-    # until CI and CodeRabbit have settled. Read-only aside from waiting.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/process-reviews/scripts/wait-for-reviews\.sh\b",
-    # echo: harmless producer used to feed stdin into reply-to-pr-thread.sh
-    # (and similar safe-pipe-bash patterns). Surviving content has no shell
-    # metachars (UNSAFE_META check earlier would have asked first).
+    # echo: harmless producer. Surviving content has no shell metachars
+    # (UNSAFE_META check earlier would have asked first).
     r"^echo\b",
     # Bare `cat` (no file operands) — a pure stdin passthrough, used as the
-    # producer of a quoted-heredoc pipe (`cat <<'EOF' | bash safe.sh URL`). The
+    # producer of a quoted-heredoc pipe (`cat <<'EOF' | grep x`). The
     # heredoc body is stripped upstream, leaving just `cat`. A `cat <file>` form
     # keeps its operand and does NOT match (so it still asks), and the pipe
     # TARGET must independently be a safe consumer (strip_safe_pipes).
@@ -628,13 +584,6 @@ def is_safe_pipe_target(part):
                 if not is_safe_tee_path(tok):
                     return False
         return True
-    # Known-safe script as pipe target. Only the `bash <full-trusted-path>`
-    # form is accepted — the direct-name form (`script.sh ...`) gave up the
-    # path information that we need to verify the script is the audited one.
-    if name == "bash" and len(argv) >= 2:
-        script_path = os.path.expanduser(argv[1])
-        if script_path in SAFE_PIPE_SCRIPT_PATHS:
-            return True
     return False
 
 

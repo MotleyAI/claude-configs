@@ -150,7 +150,7 @@ _RETRY_INNER = [
     "git push --force",
     "git pull --rebase",
     "docker ps",
-    "bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh 424",
+    "la-wait-for-reviews 424",
     "rm -rf build",
     "ls",
 ]
@@ -1267,82 +1267,38 @@ class TestHookIntegration:
         }) == "allow"
 
 
-class TestSkillScriptsUnsandboxed:
-    """Skill scripts that wrap gh and need sandbox bypass should not prompt.
-    Only accepted from home-rooted invocations (`bash ~/.claude/...`,
-    `bash $HOME/.claude/...`, or `bash /home/<user>/.claude/...`). Arbitrary
-    paths and bare-name forms must NOT be auto-approved."""
+class TestLaCommands:
+    """living-architecture's `la-*` commands run sandboxed (gh works there).
+    Unsandboxed they are never auto-approved: a bare name is resolved through
+    PATH, which a same-named program earlier in PATH could shadow."""
 
-    # --- canonical bash forms: allow ---
+    _REPLY = "la-reply-to-pr-thread https://github.com/x/y/pull/1#discussion_r1"
 
-    def test_fetch_coderabbit_threads_bash_form_allows(self):
-        assert get_decision("Bash", {
-            "command": "bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 70 --repo MotleyAI/slayer",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
+    @pytest.mark.parametrize("cmd", [
+        "la-fetch-coderabbit-threads 70 --repo x/y",
+        "la-fetch-failed-pr-checks 70",
+        "la-wait-for-reviews 70 --repo x/y",
+        _REPLY,
+        "cat <<'EOF' | " + _REPLY + "\nbody\nEOF",
+    ])
+    def test_sandboxed_allows(self, cmd):
+        assert get_decision("Bash", {"command": cmd}) == "allow"
 
-    def test_fetch_failed_pr_checks_bash_form_allows(self):
-        assert get_decision("Bash", {
-            "command": "bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh 70",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
+    @pytest.mark.parametrize("cmd", [
+        _REPLY,
+        "la-fetch-coderabbit-threads 70 --repo x/y",
+        "echo body | " + _REPLY,
+    ])
+    def test_unsandboxed_asks(self, cmd):
+        assert get_decision("Bash", {"command": cmd, "dangerouslyDisableSandbox": True}) == "ask"
 
-    def test_reply_to_pr_thread_bash_form_allows(self):
-        assert get_decision("Bash", {
-            "command": "bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
-
-    def test_fetch_coderabbit_threads_absolute_home_allows(self):
-        # `/home/<user>/.claude/...` is the resolved form of `~/.claude/...`
-        assert get_decision("Bash", {
-            "command": "bash /home/james/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 7",
-            "dangerouslyDisableSandbox": True,
-        }) == "allow"
-
-    # `$HOME/...` is intentionally NOT in the allowlist regex: the
-    # UNSAFE_META check (line 544) catches `$` as a shell metacharacter and
-    # asks before we ever reach the allowlist. The shell expansion has to
-    # happen earlier — either as `~/...` (no `$`) or a fully resolved
-    # `/home/<user>/...` path.
-
-    # --- spoofed prefixes: must ask ---
-
-    def test_fetch_coderabbit_threads_tmp_prefix_asks(self):
-        # `/tmp/.claude/skills/...` — an attacker-writable prefix. Must NOT
-        # match the home-rooted allowlist; falls through to ask.
-        assert get_decision("Bash", {
-            "command": "bash /tmp/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh 7",
-            "dangerouslyDisableSandbox": True,
-        }) == "ask"
-
-    def test_reply_to_pr_thread_tmp_prefix_asks(self):
-        assert get_decision("Bash", {
-            "command": "bash /tmp/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
-            "dangerouslyDisableSandbox": True,
-        }) == "ask"
-
-    # --- bare-name direct forms: must ask (PATH could shadow with malicious) ---
-
-    def test_fetch_failed_pr_checks_direct_form_asks(self):
-        assert get_decision("Bash", {
-            "command": "fetch-failed-pr-checks.sh 70 --repo MotleyAI/slayer",
-            "dangerouslyDisableSandbox": True,
-        }) == "ask"
-
-    def test_reply_to_pr_thread_direct_form_asks(self):
-        assert get_decision("Bash", {
-            "command": "reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
-            "dangerouslyDisableSandbox": True,
-        }) == "ask"
-
-    # --- unrelated scripts under skills/ are not auto-approved ---
-
-    def test_unknown_skill_script_still_asks(self):
-        assert get_decision("Bash", {
-            "command": "bash ~/.claude/skills/some-other-script/scripts/foo.sh",
-            "dangerouslyDisableSandbox": True,
-        }) == "ask"
+    @pytest.mark.parametrize("cmd", [
+        "echo body | bash /tmp/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1",
+        "echo body | " + _REPLY,
+        "echo body | some-other-script.sh",
+    ])
+    def test_no_script_is_a_safe_pipe_target(self, cmd):
+        assert strip_safe_pipes(cmd) is None
 
 
 class TestGitPush:
@@ -1451,49 +1407,6 @@ class TestGitPush:
             "command": "git push origin egor/force-fix",
             "dangerouslyDisableSandbox": True,
         }) == "allow"
-
-
-class TestSafePipeScriptDirectForm:
-    """Pipe-target safe-script allowlist accepts `bash <full-trusted-path>`
-    only. The bare-name direct form and arbitrary paths (`/tmp/<spoofed>.sh`)
-    must be rejected — a basename-only check would let any same-named script
-    bypass the sandbox via the pipe path."""
-
-    _trusted = os.path.expanduser(
-        "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
-    )
-
-    def test_bash_script_form_allows(self):
-        # `echo body | bash <trusted-full-path>` — the canonical form.
-        assert strip_safe_pipes(
-            f"echo body | bash {self._trusted} https://github.com/x/y/pull/1#discussion_r1"
-        ) == "echo body"
-
-    def test_bash_script_with_tilde_allows(self):
-        # The hook expands `~` before the membership check.
-        assert strip_safe_pipes(
-            "echo body | bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
-        ) == "echo body"
-
-    def test_bash_spoofed_path_rejected(self):
-        # `bash /tmp/reply-to-pr-thread.sh ...` — same basename, different
-        # path — must NOT be treated as a safe pipe target.
-        assert strip_safe_pipes(
-            "echo body | bash /tmp/reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
-        ) is None
-
-    def test_direct_script_form_rejected(self):
-        # Bare-name direct form drops the path information we'd need to
-        # verify trust — must be rejected.
-        assert strip_safe_pipes(
-            "echo body | reply-to-pr-thread.sh https://github.com/x/y/pull/1#discussion_r1"
-        ) is None
-
-    def test_unknown_script_pipe_target_rejected(self):
-        assert strip_safe_pipes("echo body | some-other-script.sh") is None
-
-    def test_bash_unknown_script_pipe_rejected(self):
-        assert strip_safe_pipes("echo body | bash /tmp/random.sh") is None
 
 
 class TestGitPullMerge:

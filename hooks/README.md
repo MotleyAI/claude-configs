@@ -14,15 +14,17 @@ Everything auto-approves — the sandbox contains it — except what reaches Git
 - A git/gh command nested in `$()`, backticks, `( )`, `{ }`, a pipe or an exec wrapper (`bash -c`, `xargs`, `timeout`, …) is vetted the same way.
 - git with code-running overrides (`-c`, `--upload-pack`, `ext::` remotes, `GIT_SSH_COMMAND=`, …) plus a network subcommand → **ask**.
 
+Inside the sandbox this is a guardrail against accidental writes, not a boundary: a deliberately disguised command (`g\it push --force`, `f=git; $f push`, a script calling git) is not recognised. Outside the sandbox anything unrecognised asks.
+
 Statements are split on `&&`, `||`, `;` and newlines; `#` comments are dropped and `\`-newline continuations joined, as bash does. Quoted heredoc bodies (`<<'EOF'`) are dropped as inert data, but only for markers in shell code — not in quotes, comments or `<<<` here-strings.
 
 ## Bash outside sandbox (`dangerouslyDisableSandbox: true`)
 
 | Command | Decision | Why |
 |---------|----------|-----|
-| Unsafe metacharacters (`` ` ``, `$()`, `()`, `{}`, `<`, `>`, newline) | **ask** | Can't safely parse |
+| Unsafe metacharacters (`` ` ``, `$()`, `()`, `{}`, `<`, `>`, newline), incl. `$()`/backticks inside double quotes | **ask** | Can't safely parse |
 | `cmd1 && cmd2`, `;`, `\|\|` | **evaluate each** | Each part checked independently |
-| git with code-running overrides (`-c`, `--config-env`, `--upload-pack`, `--receive-pack`, `ext::`/`fd::`, `GIT_*`/`PATH`/`HOME` env prefixes) | **ask** | Runs an arbitrary program |
+| git with code-running overrides (`-c`, `--config-env`, `--upload-pack`, `--receive-pack`, `<helper>::` remotes, `GIT_*`/`PATH`/`HOME` env prefixes) | **ask** | Runs an arbitrary program |
 | `cmd \| safe_filter` | **evaluate cmd** | Safe pipe targets: head, tail, grep, wc, sort |
 | `git push`, `docker` | **ask** | Dangerous — mutate remote/state |
 | `git fetch`, `git ls-remote` | **allow** | Read-only, just needs keyring |

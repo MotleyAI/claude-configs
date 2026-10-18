@@ -243,6 +243,27 @@ def deny(reason):
     sys.exit(0)
 
 
+def has_substitution(cmd):
+    """True if `cmd` has a `$(...)` or backtick substitution bash would run —
+    including inside double quotes; only single quotes make them literal."""
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "\\" and not in_single:
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and (c == "`" or cmd.startswith("$(", i)):
+            return True
+        i += 1
+    return False
+
+
 def strip_quoted_strings(cmd):
     """Replace quoted strings with placeholder to avoid false metachar matches.
     E.g. gh api --jq '[.[] | select(...)]' → gh api --jq ___"""
@@ -729,8 +750,8 @@ def _leading_assignments(raw):
 def git_runs_code(cleaned, normalized):
     """True if a git/gh command carries overrides that make it run arbitrary
     programs: `-c`/`--config-env` (core.sshCommand, protocol.ext.allow, ...),
-    `--upload-pack`/`--receive-pack`/`--exec`, `ext::`/`fd::` remotes, or
-    env vars such as GIT_SSH_COMMAND."""
+    `--upload-pack`/`--receive-pack`/`--exec`, `<helper>::` remotes (ext::,
+    fd::, any git-remote-* on PATH), or env vars such as GIT_SSH_COMMAND."""
     try:
         argv = shlex.split(normalized)
     except ValueError:
@@ -749,9 +770,10 @@ def git_runs_code(cleaned, normalized):
         i += 2 if opt in _GIT_VALUE_GLOBALS else 1
     sub = argv[i] if i < len(argv) else ""
     for tok in argv[i + 1:]:
-        if tok.startswith(("--upload-pack", "--receive-pack", "--exec", "fd::")):
+        if tok.startswith(("--upload-pack", "--receive-pack", "--exec")):
             return True
-        if "ext::" in tok or (sub == "ls-remote" and tok.startswith("-u")):
+        # `<helper>::<addr>` makes git run `git-remote-<helper>` from PATH.
+        if "::" in tok or (sub == "ls-remote" and tok.startswith("-u")):
             return True
     return False
 
@@ -852,7 +874,8 @@ cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 # Only block when unsandboxed — inside the sandbox, containment handles the risk,
 # and patterns like git commit -m "$(cat <<'EOF' ...)" are safe and common.
 # Use unquoted version so metacharacters inside quotes don't trigger false positives.
-if unsandboxed and UNSAFE_META.search(cmd_unquoted):
+if unsandboxed and (UNSAFE_META.search(cmd_unquoted)
+                    or has_substitution(cmd_for_meta_check)):
     ask(f"Compound command: {cmd[:120]}")
 
 # Decompose into statements on &&, ||, ; and newlines (redirect-stripped so 2>&1

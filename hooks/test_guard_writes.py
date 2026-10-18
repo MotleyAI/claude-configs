@@ -1709,6 +1709,10 @@ _HIDDEN_WRITES = [
     "git ls-remote -u 'touch /tmp/x' .",
     "git fetch --upload-pack='touch /tmp/x' .",
     "git push --receive-pack='touch /tmp/x' origin",
+    # any `<helper>::` remote runs git-remote-<helper> from PATH
+    "git push evil::payload",
+    "git fetch evil::payload",
+    "git ls-remote evil::x",
     # heredoc markers that aren't heredocs
     "echo ok # <<'EOF'\nEOF\ngit push --force",
     "echo \"<<'EOF'\"\nEOF\ngit push --force",
@@ -1764,6 +1768,26 @@ class TestBypassRegressions:
     @pytest.mark.parametrize("cmd", _STILL_ALLOWED)
     def test_common_commands_still_allowed_sandboxed(self, cmd):
         assert get_decision("Bash", {"command": cmd}) == "allow"
+
+    @pytest.mark.parametrize("cmd", [
+        'gh pr view 1 "$(touch /tmp/x)"',
+        'gh pr comment 1 --body "$(g\\h pr merge 1)"',
+        'gh pr comment 1 --body "`id`"',
+        'git fetch "$(id)"',
+    ])
+    def test_substitution_in_double_quotes_asks_unsandboxed(self, cmd):
+        assert get_decision("Bash", {
+            "command": cmd, "dangerouslyDisableSandbox": True,
+        }) == "ask"
+
+    @pytest.mark.parametrize("cmd", [
+        "gh pr comment 1 --body '$(literal) `literal`'",
+        'gh pr comment 1 --body "costs \\$5"',
+    ])
+    def test_literal_dollar_allowed_unsandboxed(self, cmd):
+        assert get_decision("Bash", {
+            "command": cmd, "dangerouslyDisableSandbox": True,
+        }) == "allow"
 
     def test_bash_really_runs_line_after_commented_marker(self):
         """Ground truth for the comment case: bash executes the third line."""
@@ -1844,6 +1868,7 @@ class TestGitRunsCode:
         "git push --exec=x origin",
         "git fetch ext::sh",
         "git fetch fd::3",
+        "git push evil::payload",
         "GIT_SSH_COMMAND=x git fetch",
         "PATH=/tmp git status",
         "HOME=/tmp gh pr view 1",

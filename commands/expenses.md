@@ -17,6 +17,8 @@ The "Statement #SBIE-..." link points to /admin/billing/<id>/pdf — despite the
 containing slack_invoice_<stmt>.pdf (the receipt) and slack_fair_billing_statement_<stmt>.pdf.
 Don't navigate to it; use the same blob-download JS as for GitHub (fetch with credentials, a.download click),
 saving with a .zip name, then unzip and move/rename both PDFs into ~/Downloads/receipts.
+If a second download silently never lands (JS reports 200 but no file), Chrome is blocking multiple
+automatic downloads from slack.com — ask the user to allow "Automatic downloads" for motley-ai.slack.com.
 
 # Anthropic
 The receipts can be either at 
@@ -26,8 +28,11 @@ https://platform.claude.com/settings/billing
 In both cases, click View > Download receipt to download. 
 claude.ai notes: the URL redirects to /new#settings/billing and opens a settings modal (screenshot it;
 get_page_text shows only the chat page). The Max plan invoices are dated the 10th of the month and post
-to the bank statement a day later. "View" opens a Stripe invoice page (invoice.stripe.com) in a new tab —
-click its "Download receipt" button; the file lands in ~/Downloads as Receipt-<number>.pdf, then mv/rename.
+to the bank statement a day later. The Invoices table now has "Download PDF" instead of "View" — that gives
+the unpaid-style INVOICE, not the receipt; don't use it. Instead grab the row's link href via javascript_tool
+([role=dialog] tr containing the date → a.href = pay.stripe.com/invoice/<acct>/<live_token>/pdf?s=ap) and open
+https://invoice.stripe.com/i/<acct>/<live_token> in a new tab. Click its "Download receipt" button by
+coordinates (ref-click silently does nothing); lands in ~/Downloads as Receipt-<number>.pdf, then mv/rename.
 platform.claude.com notes: requires its own sign-in (ask the user). $108.10 charges ($100 + 8.1% VAT) are
 API credit grants — see Organization settings > Billing > "Invoice history" (dates in UTC), click View on
 the matching row; same Stripe invoice page / "Download receipt" flow as claude.ai.
@@ -43,8 +48,11 @@ personal account (billing email egor.kraev@gmail.com, profile "gyg", ChatGPT Pro
 to switch accounts if the bottom-left profile says Free. /admin/billing just redirects (no workspace).
 In Settings > Billing, "Transaction history" lists payments (dated a day before the statement).
 Click the ">" chevron at the far right of the matching row (clicking the row body does nothing) —
-opens the OpenAI Ireland Stripe invoice page in a new tab; click "Download receipt".
+opens the OpenAI Ireland Stripe invoice page in a new tab; click "Download receipt" (by coordinates; the
+first click on the new tab may only focus it — if nothing lands after ~10s, click again).
 Lands in ~/Downloads as Receipt-<n>.pdf; then mv/rename.
+(The #settings/Billing URL now redirects to a full page at chatgpt.com/settings/billing; if Chrome shows
+the logged-out "Welcome back" dialog, ask the user to sign in.)
 
 # Augment Code
 https://app.augmentcode.com/account/subscription
@@ -61,7 +69,7 @@ https://www.meetup.com/payments/meetup_plus_payments_made/
 Click the "Meetup+ receipts" tab. Find the matching row and click the download icon.
 This opens an HTML invoice on S3 (invoicestaxamo.s3.amazonaws.com). Convert to PDF with:
   google-chrome --headless --disable-gpu --print-to-pdf="<dest>.pdf" --no-sandbox "<s3-url>"
-(Must run with dangerouslyDisableSandbox: true)
+(Works inside the sandbox — no need to bypass it.)
 Shortcut: instead of clicking the icon, grab the row's link href via javascript_tool
 (document.querySelectorAll('a') filtered on 'taxamo'; rows are in date order, hrefs end in
 base64-encoded INV numbers) — an invoice.taxamo.com/api/v1/transactions/.../invoice URL that
@@ -90,6 +98,13 @@ Stripe billing portal at billing.sonarsource.com in the same tab (wait for the d
 Find the invoice row matching the date/amount and click it (click the amount text, not via ref) — it opens
 the Stripe invoice page in a new tab. If that tab hangs on its spinner, location.reload() fixes it.
 Click "Download receipt" there; lands in ~/Downloads as Receipt-<n>.pdf.
+
+# Gamma (statement shows "gamma.app"; Pro Monthly, €24, charged ~22nd, posts to statement a day later)
+https://gamma.app/settings/billing (Settings > Workspace > Billing; dismiss any promo modal on gamma.app first)
+Click "Manage subscription in Stripe" — opens the Stripe billing portal at billing.gamma.app in a new tab.
+Under "Invoice history" click the amount text of the matching row (by coordinates) — opens the Stripe
+invoice page in another new tab; click "Download receipt" (by coordinates).
+Lands in ~/Downloads as Receipt-<n>.pdf; then mv/rename (e.g. gamma_pro-subscription_<date>_eur24.00_receipt.pdf).
 
 # GitKraken
 https://gitkraken.dev/subscription
@@ -122,7 +137,8 @@ in the dialog, click Download. Lands in ~/Downloads as <invoice-number>.pdf; the
 https://admin.google.com/ac/billing/subscriptions
 (May demand password re-verification even with an active Google session — ask the user.)
 Click "View invoices" on the Google Workspace Business Standard row — lands on Payment accounts >
-Transactions, grouped by month. In the billing-period month's section, expand "Documents", click the
+Transactions, grouped by month (older months start collapsed — click the "1 – 31 <Mon>" header row to
+expand). In the billing-period month's section, expand "Documents", click the
 "PDF Invoice <number> (Created: ...)" link — a small dropdown opens; click "Download".
 Lands in ~/Downloads as <invoice-number>.pdf; then mv/rename.
 IMPORTANT: The payment date is the 1st of the month, but the invoice is for the PREVIOUS month's usage.

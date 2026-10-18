@@ -85,6 +85,11 @@ ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to r
 This includes `gh` and network `git` (`fetch`/`push`/`pull`/`ls-remote`): they work sandboxed (keyring auth included),
 and the PreToolUse hook gives them the same verdict as unsandboxed (reads allowed, writes/force-pushes ask).
 
+My network is flaky. When a network command (`git push`/`fetch`, `gh`, MCP calls, ...) fails with a connectivity
+error ("No route to host", "Network unreachable", timeouts), just keep retrying it, still sandboxed, with a short
+pause between attempts. Don't stop to ask me, and don't treat it as a reason to run unsandboxed. Only report and
+ask if it's an auth/access error, or if it keeps failing after many retries.
+
 NEVER EVER add a commit comment like "Co-authored by Claude Code" - you're just a hired grunt, I'm the author
 When merging anything into a branch, commit local changes then merge, NEVER STASH NEVER REBASE
 

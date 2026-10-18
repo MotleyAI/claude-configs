@@ -25,3 +25,12 @@ settings.local.json
 mcp-needs-auth-cache.json
 .last-cleanup
 .last-update-result.json
+daemon/
+daemon.lock
+daemon.log
+daemon.status.json
+feedback/
+jobs/
+skills/synced/
+state/
+telemetry/

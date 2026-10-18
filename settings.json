@@ -6,6 +6,8 @@
   "permissions": {
     "allow": [
       "Agent(*)",
+      "mcp__codex__codex",
+      "mcp__codex__codex-reply",
       "Bash(gh:*)",
       "Bash(echo:*)",
       "Bash(tail:*)",

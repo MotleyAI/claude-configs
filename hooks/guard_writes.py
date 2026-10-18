@@ -33,8 +33,10 @@ tool_input = data.get("tool_input", {})
 cmd = tool_input.get("command", "").strip()
 unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 
-# Safe I/O redirections to strip before checking for shell metacharacters
-SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
+# Safe I/O redirections to strip before checking for shell metacharacters.
+# Replaced by a space, never across a newline — gluing `push 2>&1 --force` into
+# `push--force`, or two lines into one, would hide what follows.
+SAFE_REDIRECTS = re.compile(r'[ \t]*\d*>&\d+[ \t]*|[ \t]*\d*>/dev/null[ \t]*')
 
 # Shell metacharacters that can't be safely decomposed by splitting:
 # command substitution and grouping ( $(...), backticks, (), {} ), redirects
@@ -99,7 +101,8 @@ SAFE_UNSANDBOXED_PATTERNS = [
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
     # git ls-remote: read-only network — lists remote refs, mutates nothing
-    # (same risk class as fetch, strictly less powerful).
+    # (same risk class as fetch, strictly less powerful). Like every git entry
+    # here, it is only safe without code-running overrides — see git_runs_code.
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+ls-remote\b",
     # git push (plain — dangerous variants are caught earlier by
     # ASK_ALWAYS_PATTERNS, so anything reaching here is non-force, non-delete).
@@ -145,10 +148,29 @@ SAFE_UNSANDBOXED_PATTERNS = [
 NETWORK_PATTERNS = [
     r"^gh\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+ls-remote\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
 ]
+
+# Env vars that make git/gh run another program or read another config
+# (GIT_SSH_COMMAND, GIT_CONFIG_*, PATH, HOME → a different ~/.gitconfig, ...).
+_CODE_RUNNING_ENV = re.compile(
+    r"^(?:GIT_\w*|GH_\w*|SSH_\w*|LD_\w*|PATH|HOME|XDG_\w*|PAGER|EDITOR|VISUAL"
+    r"|BROWSER|BASH_ENV|ENV)$"
+)
+# git global options that take a separate value token.
+_GIT_VALUE_GLOBALS = {"-C", "--git-dir", "--work-tree", "--namespace"}
+
+# Wrappers that run their arguments as a command (`timeout 60 git push`).
+_EXEC_WRAPPERS = {
+    "bash", "sh", "zsh", "dash", "eval", "exec", "xargs", "timeout", "nohup",
+    "nice", "time", "watch", "sudo", "stdbuf", "flock", "parallel", "find",
+}
+# A git/gh invocation anywhere inside a statement, and where it ends.
+_NESTED_CMD_RE = re.compile(r"(?<![\w.-])(?:/\S*/)?(?:git|gh)\s")
+_NESTED_END_RE = re.compile(r"[)`'\";&|\n]")
 
 # Patterns that are denied with a custom message. Used for variants where the
 # right answer is "run a SAFER form of the same command". Checked BEFORE
@@ -252,6 +274,10 @@ _RETRY_PREFIX = re.compile(
 )
 
 
+# A leading `VAR=value` prefix; the value may be quoted (`A='x y' git push`).
+_ASSIGNMENT = re.compile(r'''^(\w+)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])*\s+''')
+
+
 def normalize_cmd(raw):
     """Strip leading env var assignments, command/env prefixes and a trusted
     retry.sh wrapper, resolve absolute paths under standard system bin dirs to
@@ -267,8 +293,8 @@ def normalize_cmd(raw):
     changed = True
     while changed:
         changed = False
-        while re.match(r'^\w+=\S*\s+', s):
-            s = re.sub(r'^\w+=\S*\s+', '', s)
+        while _ASSIGNMENT.match(s):
+            s = _ASSIGNMENT.sub('', s, count=1)
             changed = True
         if re.match(r'^(command|env)\s+', s):
             s = re.sub(r'^(command|env)\s+', '', s)
@@ -286,17 +312,15 @@ def normalize_cmd(raw):
 
 
 def split_statements(cmd):
-    """Split a command into statements on `&&`, `||`, and `;` outside of quotes.
+    """Split a command into statements on `&&`, `||`, `;` and newlines outside
+    of quotes, dropping `#` comments and joining `\\`-newline continuations.
     Returns the list of statement parts, or None if the command can't be
     safely split — a single `&` (background execution) or unbalanced quotes.
 
-    `;`, `&&`, and `||` are all plain statement separators here; each resulting
-    part is vetted independently by evaluate_single_cmd, so the chain is approved
-    iff every part would be approved on its own (`A || B` runs B when A fails, so
-    B must be allowed too). A single `|` (pipe) is left intact inside each part —
-    handled downstream by strip_safe_pipes. Command substitution / grouping
-    ( $(...), backticks, (), {} ) never reaches this splitter — it's rejected
-    earlier by the UNSAFE_META check when unsandboxed."""
+    Each part is vetted independently by evaluate_single_cmd, so the chain is
+    approved iff every part would be approved on its own (`A || B` runs B when
+    A fails, so B must be allowed too). A single `|` (pipe) is left intact
+    inside each part — handled downstream by strip_safe_pipes."""
     parts = []
     current = []
     in_single = False
@@ -304,6 +328,11 @@ def split_statements(cmd):
     i = 0
     while i < len(cmd):
         c = cmd[i]
+        if c == "\\" and not in_single:
+            if cmd[i + 1:i + 2] != "\n":
+                current.append(cmd[i:i + 2])
+            i += 2  # escaped char kept verbatim; `\`-newline is a continuation
+            continue
         if c == "'" and not in_double:
             in_single = not in_single
             current.append(c)
@@ -330,9 +359,16 @@ def split_statements(cmd):
             else:
                 # Single `|` (pipe) — left intact; strip_safe_pipes handles it.
                 current.append(c)
-        elif c == ';' and not in_single and not in_double:
+        elif c in ';\n' and not in_single and not in_double:
             parts.append(''.join(current).strip())
             current = []
+        elif (c == '#' and not in_single and not in_double
+              and (i == 0 or cmd[i - 1] in ' \t\n;&|()')):
+            # Comment: skip to the newline, which still ends the statement.
+            # (A trailing `\` inside a comment does NOT continue the line.)
+            nl = cmd.find('\n', i)
+            i = len(cmd) if nl == -1 else nl
+            continue
         else:
             current.append(c)
         i += 1
@@ -398,7 +434,7 @@ def is_safe_tee_path(p):
 # File redirects to /tmp/... or $TMPDIR/... — same destination rules as tee.
 # Covers >, >>, 2>, 2>>, &>, &>>.
 SAFE_TMP_REDIRECT = re.compile(
-    r'\s*(?:&>>|&>|2>>|2>|>>|>)\s*(/tmp/[^\s;|&<>]+|\$TMPDIR(?:/[^\s;|&<>]+)?)'
+    r'[ \t]*(?:&>>|&>|2>>|2>|>>|>)[ \t]*(/tmp/[^\s;|&<>]+|\$TMPDIR(?:/[^\s;|&<>]+)?)'
 )
 
 
@@ -416,34 +452,101 @@ def strip_safe_tmp_redirects(s):
 _QUOTED_HEREDOC_RE = re.compile(r"<<-?\s*(['\"])(\w+)\1")
 
 
+def _heredoc_close(delim, pos, cmd):
+    """Match the line closing a heredoc body that starts at newline `pos`.
+    The newline after the delimiter is not consumed, so the next line stays
+    its own statement."""
+    return re.compile(
+        r"\n[ \t]*" + re.escape(delim) + r"(?=\n|$)"
+    ).search(cmd, pos)
+
+
 def strip_quoted_heredocs(cmd):
     """Remove quoted-delimiter heredoc markers AND their bodies from a command.
 
-    ``cat <<'EOF' | bash safe.sh URL\\n<body>\\nEOF`` becomes
-    ``cat  | bash safe.sh URL`` — the inert stdin data is dropped so the leftover
-    ``<`` (from ``<<``) and the body newlines don't trip the metacharacter /
-    decomposition checks, while the real command (producer + safe pipe target)
-    is still vetted normally. Only quoted delimiters are stripped; a malformed
-    heredoc (no closing delimiter) is left intact so the guard still asks.
+    ``cat <<'EOF' | la-reply URL\\n<body>\\nEOF`` becomes ``cat  | la-reply URL``:
+    the inert stdin data goes, the real command stays to be vetted. Markers
+    count only in shell code — not inside quotes, comments or `<<<` here-strings
+    — since bash runs the lines after such a fake marker. Anything malformed
+    (unclosed quote or `$(`, missing delimiter) returns the command unchanged,
+    so the guard still sees every line.
     """
-    while True:
-        m = _QUOTED_HEREDOC_RE.search(cmd)
-        if not m:
-            return cmd
-        delim = m.group(2)
-        # Body starts at the first newline AFTER the marker's line (the rest of
-        # that line — e.g. `| bash safe.sh URL` — is real command, kept).
-        nl = cmd.find("\n", m.end())
-        if nl == -1:
-            return cmd  # no body/newline — malformed; let the meta check ask
-        close = re.compile(
-            r"\n[ \t]*" + re.escape(delim) + r"(?:\n|$)"
-        ).search(cmd, nl)
-        if not close:
-            return cmd  # no closing delimiter — malformed; let the meta check ask
-        # Drop the marker (→ space) and the body block [nl:close.end()]; keep the
-        # rest of the marker's line (cmd[m.end():nl]) and anything after close.
-        cmd = cmd[:m.start()] + " " + cmd[m.end():nl] + cmd[close.end():]
+    out = []
+    stack = []  # open contexts: "'", '"', "$(", "(", "`"
+    pending = []  # delimiters whose bodies start at the next code newline
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        ctx = stack[-1] if stack else None
+        if ctx == "'":
+            if c == "'":
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\":
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if cmd.startswith("$(", i):
+            stack.append("$(")
+            out.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            if ctx == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+            out.append(c)
+            i += 1
+            continue
+        if ctx == '"':
+            if c == '"':
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        # Shell code: top level, or inside $( ) / ( ) / backticks.
+        if c in "'\"(":
+            stack.append(c)
+        elif c == ")":
+            if ctx in ("$(", "("):
+                stack.pop()
+            elif ctx is not None:
+                return cmd  # `)` that closes nothing we track — ambiguous
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            nl = cmd.find("\n", i)
+            nl = n if nl == -1 else nl
+            out.append(cmd[i:nl])
+            i = nl
+            continue
+        elif cmd.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+            continue
+        elif c == "\n" and pending:
+            pos = i
+            for delim in pending:
+                close = _heredoc_close(delim, pos, cmd)
+                if not close:
+                    return cmd
+                pos = close.end()
+            pending = []
+            i = pos
+            continue
+        else:
+            m = _QUOTED_HEREDOC_RE.match(cmd, i)
+            if m:
+                pending.append(m.group(2))
+                out.append(" ")
+                i = m.end()
+                continue
+        out.append(c)
+        i += 1
+    if stack or pending:
+        return cmd
+    return "".join(out)
 
 
 # Flags that consume the next argv token as a value (not a file operand).
@@ -602,12 +705,85 @@ def strip_safe_pipes(cmd):
     return pipe_parts[0]
 
 
+def _leading_assignments(raw):
+    """Names of the `VAR=value` assignments prefixed to a command."""
+    names = []
+    s = raw.strip()
+    while True:
+        s = _RETRY_PREFIX.sub('', s, count=1)
+        m = _ASSIGNMENT.match(s) or re.match(r'^(?:command|env)\s+()', s)
+        if not m:
+            return names
+        if m.group(1):
+            names.append(m.group(1))
+        s = s[m.end():]
+
+
+def git_runs_code(cleaned, normalized):
+    """True if a git/gh command carries overrides that make it run arbitrary
+    programs: `-c`/`--config-env` (core.sshCommand, protocol.ext.allow, ...),
+    `--upload-pack`/`--receive-pack`/`--exec`, `ext::`/`fd::` remotes, or
+    env vars such as GIT_SSH_COMMAND."""
+    try:
+        argv = shlex.split(normalized)
+    except ValueError:
+        return True
+    if not argv or argv[0] not in ("git", "gh"):
+        return False
+    if any(_CODE_RUNNING_ENV.match(n) for n in _leading_assignments(cleaned)):
+        return True
+    if argv[0] == "gh":
+        return False
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        opt = argv[i]
+        if opt.startswith(("-c", "--config-env", "--exec-path")):
+            return True
+        i += 2 if opt in _GIT_VALUE_GLOBALS else 1
+    sub = argv[i] if i < len(argv) else ""
+    for tok in argv[i + 1:]:
+        if tok.startswith(("--upload-pack", "--receive-pack", "--exec", "fd::")):
+            return True
+        if "ext::" in tok or (sub == "ls-remote" and tok.startswith("-u")):
+            return True
+    return False
+
+
+def nested_command_verdict(stmt, unsandboxed):
+    """Vet git/gh commands hidden inside a statement — in `$(...)`, backticks,
+    a subshell/brace group, a pipe, or an exec wrapper (`bash -c`, `xargs`,
+    `timeout`). Returns ("ask", reason) if one would not be allowed, else None."""
+    normalized = normalize_cmd(stmt)
+    words = normalized.split(None, 1)
+    head = os.path.basename(words[0]) if words else ""
+    if head in _EXEC_WRAPPERS or "$(" in stmt or "`" in stmt:
+        text = normalized
+    else:
+        text = strip_quoted_strings(normalized)
+        if not re.search(r"[(){}|]", text):
+            return None
+    for m in _NESTED_CMD_RE.finditer(text):
+        if m.start() == 0:
+            continue  # the statement's own command — vetted by the caller
+        end = _NESTED_END_RE.search(text, m.start())
+        inner = text[m.start():end.start() if end else len(text)]
+        if evaluate_single_cmd(inner, unsandboxed)[0] != "allow":
+            return ("ask", f"Nested command: {inner.strip()[:120]}")
+    return None
+
+
 def evaluate_single_cmd(cmd_str, unsandboxed):
     """Evaluate a single (non-compound) command. Returns
     ("allow", None), ("ask", reason), or ("deny", reason)."""
     stripped = cmd_str.strip()
     # Strip safe redirections
-    cleaned = SAFE_REDIRECTS.sub('', stripped)
+    cleaned = SAFE_REDIRECTS.sub(' ', stripped).strip()
+
+    # The sandbox reaches GitHub, so a git/gh write must not hide behind a
+    # substitution, pipe or wrapper in either mode.
+    nested = nested_command_verdict(cleaned, unsandboxed)
+    if nested:
+        return nested
 
     # Try to strip safe pipes
     producer = strip_safe_pipes(cleaned)
@@ -631,7 +807,13 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
         if re.match(pattern, normalized):
             return ("ask", f"Dangerous operation: {stripped[:120]}")
 
-    safe = any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS)
+    runs_code = git_runs_code(cleaned, normalized)
+    # The git regexes can't parse a quoted `-c k='a b'` value, so a networked
+    # git with such overrides asks outright, sandboxed or not.
+    if runs_code and re.search(r"\b(?:push|fetch|pull|ls-remote|remote|clone|submodule)\b",
+                               normalized):
+        return ("ask", f"git with code-running overrides: {stripped[:120]}")
+    safe = any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS) and not runs_code
 
     # If bypassing sandbox, only allow known-safe commands
     if unsandboxed:
@@ -652,7 +834,7 @@ if tool != "Bash":
     allow()
 
 # Strip safe redirections and quoted strings for metacharacter check
-cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
+cmd_for_meta_check = SAFE_REDIRECTS.sub(' ', cmd)
 cmd_for_meta_check = strip_safe_tmp_redirects(cmd_for_meta_check)
 # Drop quoted-delimiter heredoc bodies (inert stdin data) so `<<` and the body
 # newlines don't read as a compound command; the producer + pipe target remain.
@@ -666,16 +848,17 @@ cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 if unsandboxed and UNSAFE_META.search(cmd_unquoted):
     ask(f"Compound command: {cmd[:120]}")
 
-# Decompose into statements on && and ; (redirect-stripped so 2>&1 isn't
-# read as a single &). None => a single `&` background op or unbalanced quotes.
+# Decompose into statements on &&, ||, ; and newlines (redirect-stripped so 2>&1
+# isn't read as a single &). None => a single `&` background op or unbalanced quotes.
 stmt_parts = split_statements(cmd_for_meta_check)
 if stmt_parts is None:
     if unsandboxed:
         ask(f"Compound command: {cmd[:120]}")
-    # Inside sandbox with unparseable command — sandbox contains it, allow
-    stmt_parts = [cmd_for_meta_check]
+    # Sandboxed but unparseable: split on every separator, quotes ignored, so
+    # `echo x & git push --force` can't pass as one `echo` statement.
+    stmt_parts = [p for p in re.split(r"[;&|\n]+", cmd_for_meta_check) if p.strip()]
 
-# Evaluate each statement (each part of the && / ; chain, or the single command)
+# Evaluate each statement (each part of the chain, or the single command)
 for part in stmt_parts:
     decision, reason = evaluate_single_cmd(part, unsandboxed)
     if decision == "deny":

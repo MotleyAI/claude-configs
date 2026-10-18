@@ -34,6 +34,8 @@ strip_safe_pipes = _module_globals["strip_safe_pipes"]
 strip_quoted_strings = _module_globals["strip_quoted_strings"]
 evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
 strip_safe_tmp_redirects = _module_globals["strip_safe_tmp_redirects"]
+strip_quoted_heredocs = _module_globals["strip_quoted_heredocs"]
+git_runs_code = _module_globals["git_runs_code"]
 
 
 def run_hook(tool_name, tool_input):
@@ -1691,3 +1693,173 @@ class TestGitRemote:
             "command": "git remote remove origin",
             "dangerouslyDisableSandbox": True,
         }) == "ask"
+
+
+# --- Bypass regressions: a git/gh write must never hide from the guard ---
+
+# Each runs (or can run) a network write or arbitrary code that the hook used
+# to allow. Bash really executes the trailing line in the multi-line cases.
+_HIDDEN_WRITES = [
+    # git transport / config overrides that execute a local program
+    'git -c protocol.ext.allow=always ls-remote "ext::touch /tmp/x"',
+    'git -c protocol.ext.allow=always fetch "ext::touch /tmp/x"',
+    "git -c core.sshCommand='touch /tmp/x' fetch origin",
+    "git -c x='a b' push --force",
+    "git ls-remote --upload-pack='touch /tmp/x' .",
+    "git ls-remote -u 'touch /tmp/x' .",
+    "git fetch --upload-pack='touch /tmp/x' .",
+    "git push --receive-pack='touch /tmp/x' origin",
+    # heredoc markers that aren't heredocs
+    "echo ok # <<'EOF'\nEOF\ngit push --force",
+    "echo \"<<'EOF'\"\nEOF\ngit push --force",
+    "cat <<<'X'\ngit push --force\nX",
+    # the line after a real heredoc stays its own statement
+    "cat <<'EOF'\nbody\nEOF\ngit push --force",
+    # lines must not be glued together
+    "echo hi >/dev/null\ngit push --force",
+    "echo ok\ngit push --force",
+    "echo ok # \\\ngit push --force",
+    "git push 2>&1 --force",
+    "FOO='a b' git push --force",
+    # background `&` / unbalanced quotes
+    "echo hi & git push --force",
+    'echo "x & git push --force',
+    # substitution, grouping, pipes, exec wrappers
+    "echo $(git push --force)",
+    "echo `git push --force`",
+    "(git push --force)",
+    "{ git push --force; }",
+    "echo x | xargs git push --force",
+    "bash -c 'git push --force'",
+    "timeout 60 gh pr merge 1",
+    "echo $(gh pr create --title x --body y)",
+]
+
+_STILL_ALLOWED = [
+    "git commit -m \"$(cat <<'EOF'\nsubject\n\nbody # not a comment\nEOF\n)\"",
+    "cat <<'EOF' | la-reply-to-pr-thread https://github.com/o/r/pull/1#discussion_r1\n"
+    "body\nEOF",
+    "git fetch origin",
+    "git ls-remote origin",
+    "git push -u origin egor/x",
+    "gh pr checks 10 2>&1 | head -20",
+    "git log --oneline -3 && git status --short",
+    "git status # trailing comment",
+    "~/.claude/scripts/retry.sh -n 6 -d 5 -- git push",
+    "gh api repos/o/r/pulls/1 --jq '.[] | select(.x)'",
+    "timeout 60 git fetch origin",
+    "echo $(gh pr view 1 --json title)",
+    "git -c color.ui=never log -3",
+]
+
+
+class TestBypassRegressions:
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    @pytest.mark.parametrize("cmd", _HIDDEN_WRITES)
+    def test_hidden_write_is_not_allowed(self, cmd, unsandboxed):
+        assert get_decision("Bash", {
+            "command": cmd, "dangerouslyDisableSandbox": unsandboxed,
+        }) != "allow"
+
+    @pytest.mark.parametrize("cmd", _STILL_ALLOWED)
+    def test_common_commands_still_allowed_sandboxed(self, cmd):
+        assert get_decision("Bash", {"command": cmd}) == "allow"
+
+    def test_bash_really_runs_line_after_commented_marker(self):
+        """Ground truth for the comment case: bash executes the third line."""
+        out = subprocess.run(
+            ["bash", "-c", "echo ok # <<'EOF'\nEOF\necho RAN"],
+            capture_output=True, text=True,
+        ).stdout
+        assert "RAN" in out
+
+
+class TestStripQuotedHeredocs:
+    def test_strips_body(self):
+        assert strip_quoted_heredocs("cat <<'EOF' | grep x\nbody\nEOF") == \
+            "cat   | grep x"
+
+    def test_keeps_newline_after_body(self):
+        assert strip_quoted_heredocs("cat <<'EOF'\nbody\nEOF\nls") == "cat  \nls"
+
+    def test_two_heredocs_on_one_line(self):
+        assert strip_quoted_heredocs("cat <<'A' <<'B'\na\nA\nb\nB") == "cat    "
+
+    def test_inside_command_substitution(self):
+        assert strip_quoted_heredocs("x \"$(cat <<'EOF'\nm\nEOF\n)\"") == \
+            "x \"$(cat  \n)\""
+
+    @pytest.mark.parametrize("cmd", [
+        "echo ok # <<'EOF'\nEOF\nls",       # marker in a comment
+        "echo \"<<'EOF'\"\nEOF\nls",        # marker in double quotes
+        "echo '<<\"EOF\"'\nEOF\nls",        # marker in single quotes
+        "cat <<<'EOF'\nEOF\nls",            # here-string
+        "cat <<EOF\nbody\nEOF",             # unquoted delimiter
+    ])
+    def test_not_a_quoted_heredoc_left_alone(self, cmd):
+        assert strip_quoted_heredocs(cmd) == cmd
+
+    @pytest.mark.parametrize("cmd", [
+        "cat <<'EOF'\nbody",                # no closing delimiter
+        "cat <<'EOF'",                      # no body
+        "echo \"$(cat <<'EOF'\nm\nEOF\n",   # unclosed $( and quote
+    ])
+    def test_malformed_left_alone(self, cmd):
+        assert strip_quoted_heredocs(cmd) == cmd
+
+
+class TestSplitStatementsLines:
+    def test_newline_separates(self):
+        assert split_statements("a\nb") == ["a", "b"]
+
+    def test_newline_in_quotes_kept(self):
+        assert split_statements('echo "a\nb"') == ['echo "a\nb"']
+
+    def test_comment_dropped(self):
+        assert split_statements("a # b ; c\nd") == ["a", "d"]
+
+    def test_hash_inside_word_is_not_comment(self):
+        assert split_statements("echo a#b") == ["echo a#b"]
+
+    def test_line_continuation_joined(self):
+        assert split_statements("git push \\\n  --force") == ["git push   --force"]
+
+    def test_backslash_in_comment_does_not_continue(self):
+        assert split_statements("a # x \\\nb") == ["a", "b"]
+
+    def test_escaped_separator_kept(self):
+        assert split_statements("echo a\\;b") == ["echo a\\;b"]
+
+
+class TestGitRunsCode:
+    @pytest.mark.parametrize("cmd", [
+        "git -c core.sshCommand=x fetch",
+        "git --config-env=core.sshCommand=V fetch",
+        "git --exec-path=/tmp fetch",
+        "git -C repo -c k=v status",
+        "git ls-remote --upload-pack=x .",
+        "git ls-remote -u x .",
+        "git fetch --upload-pack x .",
+        "git push --receive-pack=x origin",
+        "git push --exec=x origin",
+        "git fetch ext::sh",
+        "git fetch fd::3",
+        "GIT_SSH_COMMAND=x git fetch",
+        "PATH=/tmp git status",
+        "HOME=/tmp gh pr view 1",
+        "env GIT_CONFIG_PARAMETERS=x git fetch",
+    ])
+    def test_detected(self, cmd):
+        assert git_runs_code(cmd, normalize_cmd(cmd))
+
+    @pytest.mark.parametrize("cmd", [
+        "git fetch origin",
+        "git -C repo status",
+        "git log -c",
+        "git push -u origin x",
+        "A=1 git fetch",
+        "gh pr view 1",
+        "ls -c",
+    ])
+    def test_not_detected(self, cmd):
+        assert not git_runs_code(cmd, normalize_cmd(cmd))

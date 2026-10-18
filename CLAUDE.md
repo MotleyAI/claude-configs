@@ -1,4 +1,4 @@
-When using LLMs to output Pydantic classes, ALWAYS make sure these classes don't contain 
+When using LLMs to output Pydantic classes that are used as output schemas for LLMs, ALWAYS make sure these classes don't contain 
 any Dict-typed fields, instead use lists of helper classes with a name field. So for example instead of 
 ```python
 class Foo(BaseModel):
@@ -24,6 +24,9 @@ make sure you ALWAYS add solid test coverage for it, adding tests in the appropr
 - Whenever you do any changes to the code, afterwards run the FULL test suite for that repository, 
 except integration tests, and fix any that fail.
 Don't just run the tests that you think are relevant, run ALL the non-integration tests every time after changing any code in a repo.
+- ALWAYS re-run a Jupyter notebook after editing ANY of its cells, and save the executed outputs 
+(e.g. `jupyter nbconvert --to notebook --execute --inplace <nb>`). NEVER hand-edit a notebook's stored 
+outputs or leave them stale — the committed outputs must be the real result of running the current cells.
 - Do NOT pay me any compliments. If you think the instructions I give are not the best idea, and 
 you have a suggestion on how to achieve the same goal better, fell free to suggest it, but only once.
 If I then tell you to proceed with my original instructions, do not question me again. 
@@ -44,31 +47,54 @@ and fixing it doesn't require a major refactor (ask me if in doubt about what co
 For Python and Javascript, ALWAYS use LSP servers to search for code, instead of grep.
 
 To fetch unresolved CodeRabbit review threads on a GitHub PR, ALWAYS use the
-`fetch-coderabbit-threads` skill (script:
-`~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh`).
+`la:fetch-coderabbit-threads` skill (command: `la-fetch-coderabbit-threads`).
 Do NOT hand-roll `gh api graphql` queries for review threads, and do NOT use
 `gh pr view` / `gh api .../pulls/N/comments` for this — they don't expose
 `isResolved` and miss CodeRabbit's review-summary nitpicks. If the skill is
 missing a flag you need, extend the skill rather than reaching for `gh` directly.
 
 To reply to a CodeRabbit thread (or any PR review thread), ALWAYS use the
-`reply-to-pr-thread` skill (script:
-`~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh`). Do NOT
+`la:reply-to-pr-thread` skill (command: `la-reply-to-pr-thread`). Do NOT
 call `gh api .../pulls/N/comments/<id>/replies` directly. Body is read from
-stdin; the script parses the discussion URL and prints the new reply's URL.
+stdin; the command parses the discussion URL and prints the new reply's URL.
 Per the global "never resolve CodeRabbit threads" rule, this is the only
 allowed channel for closing the loop on an invalid CodeRabbit comment — never
 call any resolve mutation.
 
 To check failed CI checks on a GitHub PR (and fetch their failed-step logs),
-ALWAYS use the `fetch-failed-pr-checks` skill (script:
-`~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh`).
+ALWAYS use the `la:fetch-failed-pr-checks` skill (command: `la-fetch-failed-pr-checks`).
 Do NOT use `gh pr checks` / `gh run view --log` directly — the skill handles
 all three statusCheckRollup typenames (CheckRun / StatusContext / WorkflowRun)
 and bundles failed-step logs in one call. If the skill is missing a flag you
 need, extend the skill rather than reaching for `gh` directly.
 
+NEVER mention Linear issues in docstrings or docs (apart from the architecture folder and if subfolders, if these exist)
+
+NEVER refer to issue numbers (e.g. DEV-1234) anywhere in code — comments, docstrings, or
+identifiers — with ONE exception: a FUTURE issue that will fix or unlock something (a
+forward pointer) is allowed. Remove any non-forward issue-number reference whenever you
+come across it in code you touch. (The architecture/ folder and OpenSpec change/spec docs
+are docs, not code, and keep their issue references.)
+
+Always keep docstrings as CONCISE as possible!!!
+
+If a tool you're supposed to use, such as Perplexity or Linear MCP, doesn't work, NEVER EVER try to improvise around it. 
+Instead, stop and ask me to fix it. 
+
 ALWAYS first try to run every command INSIDE THE SANDBOX, and only then try to run it unsandboxed if that fails.
-**Exception**: `gh` (any subcommand), `git fetch`, `git push`, `git pull` MUST be invoked with
-`dangerouslyDisableSandbox: true` on the first attempt — they need network/keyring access that the sandbox
-blocks, and running them sandboxed first will be denied by the PreToolUse hook.
+This includes `gh` and network `git` (`fetch`/`push`/`pull`/`ls-remote`): they work sandboxed (keyring auth included),
+and the PreToolUse hook gives them the same verdict as unsandboxed (reads allowed, writes/force-pushes ask).
+
+My network is flaky. When a network command (`git push`/`fetch`, `gh`, MCP calls, ...) fails with a connectivity
+error ("No route to host", "Network unreachable", timeouts), just keep retrying it, still sandboxed, with a short
+pause between attempts. Don't stop to ask me, and don't treat it as a reason to run unsandboxed. Only report and
+ask if it's an auth/access error, or if it keeps failing after many retries.
+
+NEVER EVER add a commit comment like "Co-authored by Claude Code" - you're just a hired grunt, I'm the author
+When merging anything into a branch, commit local changes then merge, NEVER STASH NEVER REBASE
+
+When running `git merge -m`, the message's first line MUST contain the merged ref in
+single quotes, e.g. `Merge branch 'origin/main' ...` — GitKraken crashes and refuses to
+open the repo/worktree while a merge whose MERGE_MSG lacks a 'quoted' ref sits uncommitted.
+
+- NEVER EVER create, cancel, or delete a Linear issue (or any other tracker issue) without asking me first and getting an explicit yes for that specific issue — this includes "follow-up" or "deferral" issues for gaps you discover mid-task. Before proposing one, search Linear for an existing issue covering it and cite what you found.

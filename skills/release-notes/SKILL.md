@@ -15,6 +15,7 @@ Write release notes for all the changes in the current repo's `main` (or `master
 - DO NOT try to imitate the style of past release notes. Their style may be no longer relevant.
 - Keep the notes brief and succinct, especially for minor releases.
 - Write the notes into an `.md` file in the repo root.
+- The release notes file is a TEMPORARY working artifact. NEVER `git add`, stage, or commit it - not even as part of a version-bump PR. Leave it on disk untracked. If a related PR (e.g. a version bump) is being made, that PR must not include the notes file.
 
 ## Style: write for users, not maintainers
 
@@ -34,7 +35,7 @@ The audience is the people who *use* this repo's library/tool/service, not the p
 2. Collect the changes since that release using `git log <last-tag>..HEAD --no-merges` on the default branch. Read commit subjects and bodies; for non-trivial commits, also inspect the diff.
 3. Determine the next version number from context (commits, package files, prior tags). If unclear, ask the user.
 4. Draft the notes following the rules above. Group related changes; lead with user-visible features and fixes.
-5. Write the notes to a new `.md` file in the repo root (e.g. `RELEASE_NOTES_<version>.md`, or append to an existing `CHANGELOG.md` if the repo uses one - check first).
+5. Write the notes to a new `RELEASE_NOTES_<version>.md` file in the repo root. Do NOT stage or commit this file - it is a temporary working artifact that stays untracked on disk.
 6. Run the validator on the written file:
 
    ```bash

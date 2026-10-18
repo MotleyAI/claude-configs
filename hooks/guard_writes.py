@@ -4,11 +4,11 @@
 # Guards dangerous operations in two layers:
 #
 # 1. Sandbox bypass: any command with dangerouslyDisableSandbox=true
-#    is prompted UNLESS it's a known-safe command that legitimately
-#    needs unsandboxed access (gh reads, git fetch/pull).
+#    is prompted UNLESS it's a known-safe command (gh reads, git fetch/pull).
+#    Network git/gh inside the sandbox gets the same allow/ask verdict.
 #
-# 2. Dangerous commands: git push, gh writes, docker — always prompt
-#    regardless of sandbox state.
+# 2. Dangerous commands: force/delete pushes, gh writes, docker — always
+#    prompt regardless of sandbox state.
 import sys
 import json
 import re
@@ -33,30 +33,21 @@ tool_input = data.get("tool_input", {})
 cmd = tool_input.get("command", "").strip()
 unsandboxed = tool_input.get("dangerouslyDisableSandbox", False)
 
-# Safe I/O redirections to strip before checking for shell metacharacters
-SAFE_REDIRECTS = re.compile(r'\s*\d*>&\d+\s*|\s*\d*>/dev/null\s*')
+# Safe I/O redirections to strip before checking for shell metacharacters.
+# Replaced by a space, never across a newline — gluing `push 2>&1 --force` into
+# `push--force`, or two lines into one, would hide what follows.
+SAFE_REDIRECTS = re.compile(r'[ \t]*\d*>&\d+[ \t]*|[ \t]*\d*>/dev/null[ \t]*')
 
-# Shell metacharacters that can't be safely decomposed
-# Note: && and | are handled separately with smarter logic
-UNSAFE_META = re.compile(r'[;`$(){}\n<>]')
+# Shell metacharacters that can't be safely decomposed by splitting:
+# command substitution and grouping ( $(...), backticks, (), {} ), redirects
+# ( <, > ), and newlines. Statement separators (&&, ||, ;) and pipes (|) are
+# deliberately NOT here — they're decomposed below and each part is vetted
+# individually, so a `;`-chain is approved iff every one of its parts would be
+# approved on its own (the same treatment && already gets).
+UNSAFE_META = re.compile(r'[`$(){}\n<>]')
 
 # Safe pipe targets — read-only consumers that can't cause side effects
 SAFE_PIPE_TARGETS = {"head", "tail", "grep", "wc", "sort"}
-
-# Scripts safe enough to receive piped stdin. Full paths only — a
-# basename-only check would let `bash /tmp/reply-to-pr-thread.sh URL`
-# (an attacker-supplied same-named script) bypass the sandbox. The
-# script must be audited and trusted — the pipe target is the *consumer*,
-# so its behavior with arbitrary stdin must be safe.
-SAFE_PIPE_SCRIPT_PATHS = {
-    # reply-to-pr-thread.sh: posts a single PR review-thread reply via
-    # `gh api .../pulls/N/comments/<id>/replies`. The skill description
-    # marks it as "auto-approved globally"; the pipe form would otherwise
-    # trip the unsafe-pipe branch.
-    os.path.expanduser(
-        "~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh"
-    ),
-}
 
 # tee is allowed as a pipe target when its destinations are all under /tmp/
 # or $TMPDIR — see is_safe_pipe_target.
@@ -95,6 +86,8 @@ ASK_ALWAYS_PATTERNS = [
 # Read-only gh patterns — safe even unsandboxed
 GH_READ_PATTERNS = [
     r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
+    # gh pr checks: the PR's status-check rollup — read-only.
+    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pr\s+checks\b",
     # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
     # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms.
     # Method match is case-insensitive — `gh api -X post` / `--method=patch` reach GitHub as writes too.
@@ -102,11 +95,22 @@ GH_READ_PATTERNS = [
     r"^gh\s+auth\s+status\b",
 ]
 
+# PR/issue comments: one easily-deleted comment each, so auto-allowed (attribution
+# is still blocked by block_claude_attribution.py). Deleting a comment asks.
+GH_COMMENT_PATTERNS = [
+    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue)\s+comment\b(?!.*\s--delete-last\b)",
+]
+
 # Commands that legitimately need unsandboxed access but are safe
 SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
+    *GH_COMMENT_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    # git ls-remote: read-only network — lists remote refs, mutates nothing
+    # (same risk class as fetch, strictly less powerful). Like every git entry
+    # here, it is only safe without code-running overrides — see git_runs_code.
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+ls-remote\b",
     # git push (plain — dangerous variants are caught earlier by
     # ASK_ALWAYS_PATTERNS, so anything reaching here is non-force, non-delete).
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
@@ -135,49 +139,49 @@ SAFE_UNSANDBOXED_PATTERNS = [
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+remote\s+get-url\b",
     # wc only emits counts, not file contents — safe even on sensitive paths
     r"^wc\b",
-    # Skill scripts are auto-allowed only when invoked via `bash` from a
-    # home-rooted path (`~/.claude/...` or `/home/<user>/.claude/...` or
-    # `/root/.claude/...`). The old `\S*` prefix matched any
-    # path ending in `.claude/skills/...`, so `bash /tmp/.claude/skills/...`
-    # was a sandbox-bypass channel. Bare-name forms (no path) were also
-    # dropped — they rely on PATH at exec time, which a malicious entry
-    # earlier in PATH can shadow.
-    #
-    # fetch-coderabbit-threads.sh: wraps a single `gh api graphql` GET query
-    # over PR review threads — read-only, no mutations.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads\.sh\b",
-    # fetch-failed-pr-checks.sh: wraps `gh pr view --json statusCheckRollup` +
-    # `gh run view --log-failed`. Read-only, no mutations.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks\.sh\b",
-    # reply-to-pr-thread.sh: POSTs a single review-thread reply via
-    # `gh api -X POST .../pulls/N/comments/<id>/replies`. Auto-approved per
-    # the user's "always allowed" request — mutates GitHub but the blast radius
-    # is one comment, easily deleted via `gh`.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread\.sh\b",
-    # wait-for-reviews.sh: polls `gh api statusCheckRollup` + PR comments
-    # until CI and CodeRabbit have settled. Read-only aside from waiting.
-    r"^bash\s+(?:~|/home/[^/\s]+|/root)/\.claude/skills/process-reviews/scripts/wait-for-reviews\.sh\b",
-    # echo: harmless producer used to feed stdin into reply-to-pr-thread.sh
-    # (and similar safe-pipe-bash patterns). Surviving content has no shell
-    # metachars (UNSAFE_META check earlier would have asked first).
+    # echo: harmless producer. Surviving content has no shell metachars
+    # (UNSAFE_META check earlier would have asked first).
     r"^echo\b",
+    # Bare `cat` (no file operands) — a pure stdin passthrough, used as the
+    # producer of a quoted-heredoc pipe (`cat <<'EOF' | grep x`). The
+    # heredoc body is stripped upstream, leaving just `cat`. A `cat <file>` form
+    # keeps its operand and does NOT match (so it still asks), and the pipe
+    # TARGET must independently be a safe consumer (strip_safe_pipes).
+    r"^cat\s*$",
 ]
 
-# Commands that genuinely need network + keyring — must run with bypass.
-# Inside the sandbox these are denied with a clear message instead of being
-# allowed and then failing opaquely at runtime.
-NEEDS_UNSANDBOXED_PATTERNS = [
+# Network git/gh commands. The sandbox reaches GitHub, so inside it they get
+# the same verdict as unsandboxed: SAFE_UNSANDBOXED → allow, anything else → ask.
+NETWORK_PATTERNS = [
     r"^gh\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
+    r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+ls-remote\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+push\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pull\b",
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+merge\b",
 ]
 
-# Patterns that are denied with a custom message rather than the generic
-# NEEDS_UNSANDBOXED bypass advice. Used for variants where the right answer
-# is "run a SAFER form of the same command". Checked BEFORE ASK_ALWAYS,
-# SAFE_UNSANDBOXED, and NEEDS_UNSANDBOXED — match wins regardless of
+# Env vars that make git/gh run another program or read another config
+# (GIT_SSH_COMMAND, GIT_CONFIG_*, PATH, HOME → a different ~/.gitconfig, ...).
+_CODE_RUNNING_ENV = re.compile(
+    r"^(?:GIT_\w*|GH_\w*|SSH_\w*|LD_\w*|PATH|HOME|XDG_\w*|PAGER|EDITOR|VISUAL"
+    r"|BROWSER|BASH_ENV|ENV)$"
+)
+# git global options that take a separate value token.
+_GIT_VALUE_GLOBALS = {"-C", "--git-dir", "--work-tree", "--namespace"}
+
+# Wrappers that run their arguments as a command (`timeout 60 git push`).
+_EXEC_WRAPPERS = {
+    "bash", "sh", "zsh", "dash", "eval", "exec", "xargs", "timeout", "nohup",
+    "nice", "time", "watch", "sudo", "stdbuf", "flock", "parallel", "find",
+}
+# A git/gh invocation anywhere inside a statement, and where it ends.
+_NESTED_CMD_RE = re.compile(r"(?<![\w.-])(?:/\S*/)?(?:git|gh)\s")
+_NESTED_END_RE = re.compile(r"[)`'\";&|\n]")
+
+# Patterns that are denied with a custom message. Used for variants where the
+# right answer is "run a SAFER form of the same command". Checked BEFORE
+# ASK_ALWAYS, SAFE_UNSANDBOXED, and NETWORK_PATTERNS — match wins regardless of
 # sandbox state.
 DENY_WITH_ADVICE_PATTERNS = [
     (
@@ -239,6 +243,27 @@ def deny(reason):
     sys.exit(0)
 
 
+def has_substitution(cmd):
+    """True if `cmd` has a `$(...)` or backtick substitution bash would run —
+    including inside double quotes; only single quotes make them literal."""
+    in_single = False
+    in_double = False
+    i = 0
+    while i < len(cmd):
+        c = cmd[i]
+        if c == "\\" and not in_single:
+            i += 2
+            continue
+        if c == "'" and not in_double:
+            in_single = not in_single
+        elif c == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and (c == "`" or cmd.startswith("$(", i)):
+            return True
+        i += 1
+    return False
+
+
 def strip_quoted_strings(cmd):
     """Replace quoted strings with placeholder to avoid false metachar matches.
     E.g. gh api --jq '[.[] | select(...)]' → gh api --jq ___"""
@@ -268,9 +293,23 @@ _SAFE_BIN_PREFIXES = (
 )
 
 
+# `retry.sh [-n N] [-d S] [--] cmd...` re-runs cmd verbatim, so the wrapper is
+# stripped and cmd judged exactly as if run bare. Home-rooted paths only (a
+# PATH-resolved or /tmp `retry.sh` could be anything), optionally via `bash`.
+_RETRY_PREFIX = re.compile(
+    r'^(?:bash\s+)?(?:~|/home/[^/\s]+|/root)/\.claude/scripts/retry\.sh'
+    r'(?:\s+-[nd]\s+\S+)*(?:\s+--)?\s+'
+)
+
+
+# A leading `VAR=value` prefix; the value may be quoted (`A='x y' git push`).
+_ASSIGNMENT = re.compile(r'''^(\w+)=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"])*\s+''')
+
+
 def normalize_cmd(raw):
-    """Strip leading env var assignments and command/env prefixes,
-    resolve absolute paths under standard system bin dirs to basenames.
+    """Strip leading env var assignments, command/env prefixes and a trusted
+    retry.sh wrapper, resolve absolute paths under standard system bin dirs to
+    basenames.
 
     Paths outside the standard bin dirs (e.g. `/tmp/foo`, `/home/u/bin/foo`)
     keep their full prefix — otherwise an attacker placing a same-named
@@ -282,11 +321,14 @@ def normalize_cmd(raw):
     changed = True
     while changed:
         changed = False
-        while re.match(r'^\w+=\S*\s+', s):
-            s = re.sub(r'^\w+=\S*\s+', '', s)
+        while _ASSIGNMENT.match(s):
+            s = _ASSIGNMENT.sub('', s, count=1)
             changed = True
         if re.match(r'^(command|env)\s+', s):
             s = re.sub(r'^(command|env)\s+', '', s)
+            changed = True
+        if _RETRY_PREFIX.match(s):
+            s = _RETRY_PREFIX.sub('', s, count=1)
             changed = True
     # Resolve absolute paths under standard bin dirs: /usr/bin/git → git.
     # Other absolute paths (e.g. /tmp/foo) are left untouched.
@@ -297,9 +339,16 @@ def normalize_cmd(raw):
     return s
 
 
-def split_on_and(cmd):
-    """Split command on && outside of quotes. Returns list of parts,
-    or None if the command can't be safely split (unbalanced quotes)."""
+def split_statements(cmd):
+    """Split a command into statements on `&&`, `||`, `;` and newlines outside
+    of quotes, dropping `#` comments and joining `\\`-newline continuations.
+    Returns the list of statement parts, or None if the command can't be
+    safely split — a single `&` (background execution) or unbalanced quotes.
+
+    Each part is vetted independently by evaluate_single_cmd, so the chain is
+    approved iff every part would be approved on its own (`A || B` runs B when
+    A fails, so B must be allowed too). A single `|` (pipe) is left intact
+    inside each part — handled downstream by strip_safe_pipes."""
     parts = []
     current = []
     in_single = False
@@ -307,6 +356,11 @@ def split_on_and(cmd):
     i = 0
     while i < len(cmd):
         c = cmd[i]
+        if c == "\\" and not in_single:
+            if cmd[i + 1:i + 2] != "\n":
+                current.append(cmd[i:i + 2])
+            i += 2  # escaped char kept verbatim; `\`-newline is a continuation
+            continue
         if c == "'" and not in_double:
             in_single = not in_single
             current.append(c)
@@ -322,6 +376,27 @@ def split_on_and(cmd):
             else:
                 # Single & (background) — not safe to decompose
                 return None
+        elif c == '|' and not in_single and not in_double:
+            if i + 1 < len(cmd) and cmd[i + 1] == '|':
+                # `||` (or-else) — statement separator; each part vetted
+                # independently, same as `&&`/`;`.
+                parts.append(''.join(current).strip())
+                current = []
+                i += 2
+                continue
+            else:
+                # Single `|` (pipe) — left intact; strip_safe_pipes handles it.
+                current.append(c)
+        elif c in ';\n' and not in_single and not in_double:
+            parts.append(''.join(current).strip())
+            current = []
+        elif (c == '#' and not in_single and not in_double
+              and (i == 0 or cmd[i - 1] in ' \t\n;&|()')):
+            # Comment: skip to the newline, which still ends the statement.
+            # (A trailing `\` inside a comment does NOT continue the line.)
+            nl = cmd.find('\n', i)
+            i = len(cmd) if nl == -1 else nl
+            continue
         else:
             current.append(c)
         i += 1
@@ -387,7 +462,7 @@ def is_safe_tee_path(p):
 # File redirects to /tmp/... or $TMPDIR/... — same destination rules as tee.
 # Covers >, >>, 2>, 2>>, &>, &>>.
 SAFE_TMP_REDIRECT = re.compile(
-    r'\s*(?:&>>|&>|2>>|2>|>>|>)\s*(/tmp/[^\s;|&<>]+|\$TMPDIR(?:/[^\s;|&<>]+)?)'
+    r'[ \t]*(?:&>>|&>|2>>|2>|>>|>)[ \t]*(/tmp/[^\s;|&<>]+|\$TMPDIR(?:/[^\s;|&<>]+)?)'
 )
 
 
@@ -396,6 +471,110 @@ def strip_safe_tmp_redirects(s):
     def repl(m):
         return '' if is_safe_tee_path(m.group(1)) else m.group(0)
     return SAFE_TMP_REDIRECT.sub(repl, s)
+
+
+# Quoted-delimiter heredoc marker: <<'EOF', <<"EOF", <<-'EOF'. The quoted
+# delimiter means the body undergoes NO shell expansion, so the body is inert
+# stdin data. An UNQUOTED heredoc (<<EOF) expands $(...) / $var in its body and
+# is deliberately NOT matched here — it keeps tripping the compound-command guard.
+_QUOTED_HEREDOC_RE = re.compile(r"<<-?\s*(['\"])(\w+)\1")
+
+
+def _heredoc_close(delim, pos, cmd):
+    """Match the line closing a heredoc body that starts at newline `pos`.
+    The newline after the delimiter is not consumed, so the next line stays
+    its own statement."""
+    return re.compile(
+        r"\n[ \t]*" + re.escape(delim) + r"(?=\n|$)"
+    ).search(cmd, pos)
+
+
+def strip_quoted_heredocs(cmd):
+    """Remove quoted-delimiter heredoc markers AND their bodies from a command.
+
+    ``cat <<'EOF' | la-reply URL\\n<body>\\nEOF`` becomes ``cat  | la-reply URL``:
+    the inert stdin data goes, the real command stays to be vetted. Markers
+    count only in shell code — not inside quotes, comments or `<<<` here-strings
+    — since bash runs the lines after such a fake marker. Anything malformed
+    (unclosed quote or `$(`, missing delimiter) returns the command unchanged,
+    so the guard still sees every line.
+    """
+    out = []
+    stack = []  # open contexts: "'", '"', "$(", "(", "`"
+    pending = []  # delimiters whose bodies start at the next code newline
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        ctx = stack[-1] if stack else None
+        if ctx == "'":
+            if c == "'":
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        if c == "\\":
+            out.append(cmd[i:i + 2])
+            i += 2
+            continue
+        if cmd.startswith("$(", i):
+            stack.append("$(")
+            out.append("$(")
+            i += 2
+            continue
+        if c == "`":
+            if ctx == "`":
+                stack.pop()
+            else:
+                stack.append("`")
+            out.append(c)
+            i += 1
+            continue
+        if ctx == '"':
+            if c == '"':
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        # Shell code: top level, or inside $( ) / ( ) / backticks.
+        if c in "'\"(":
+            stack.append(c)
+        elif c == ")":
+            if ctx in ("$(", "("):
+                stack.pop()
+            elif ctx is not None:
+                return cmd  # `)` that closes nothing we track — ambiguous
+        elif c == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+            nl = cmd.find("\n", i)
+            nl = n if nl == -1 else nl
+            out.append(cmd[i:nl])
+            i = nl
+            continue
+        elif cmd.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+            continue
+        elif c == "\n" and pending:
+            pos = i
+            for delim in pending:
+                close = _heredoc_close(delim, pos, cmd)
+                if not close:
+                    return cmd
+                pos = close.end()
+            pending = []
+            i = pos
+            continue
+        else:
+            m = _QUOTED_HEREDOC_RE.match(cmd, i)
+            if m:
+                pending.append(m.group(2))
+                out.append(" ")
+                i = m.end()
+                continue
+        out.append(c)
+        i += 1
+    if stack or pending:
+        return cmd
+    return "".join(out)
 
 
 # Flags that consume the next argv token as a value (not a file operand).
@@ -536,13 +715,6 @@ def is_safe_pipe_target(part):
                 if not is_safe_tee_path(tok):
                     return False
         return True
-    # Known-safe script as pipe target. Only the `bash <full-trusted-path>`
-    # form is accepted — the direct-name form (`script.sh ...`) gave up the
-    # path information that we need to verify the script is the audited one.
-    if name == "bash" and len(argv) >= 2:
-        script_path = os.path.expanduser(argv[1])
-        if script_path in SAFE_PIPE_SCRIPT_PATHS:
-            return True
     return False
 
 
@@ -561,7 +733,72 @@ def strip_safe_pipes(cmd):
     return pipe_parts[0]
 
 
-NEEDS_UNSANDBOXED = "This command needs unsandboxed access. Use dangerouslyDisableSandbox: true"
+def _leading_assignments(raw):
+    """Names of the `VAR=value` assignments prefixed to a command."""
+    names = []
+    s = raw.strip()
+    while True:
+        s = _RETRY_PREFIX.sub('', s, count=1)
+        m = _ASSIGNMENT.match(s) or re.match(r'^(?:command|env)\s+()', s)
+        if not m:
+            return names
+        if m.group(1):
+            names.append(m.group(1))
+        s = s[m.end():]
+
+
+def git_runs_code(cleaned, normalized):
+    """True if a git/gh command carries overrides that make it run arbitrary
+    programs: `-c`/`--config-env` (core.sshCommand, protocol.ext.allow, ...),
+    `--upload-pack`/`--receive-pack`/`--exec`, `<helper>::` remotes (ext::,
+    fd::, any git-remote-* on PATH), or env vars such as GIT_SSH_COMMAND."""
+    try:
+        argv = shlex.split(normalized)
+    except ValueError:
+        return True
+    if not argv or argv[0] not in ("git", "gh"):
+        return False
+    if any(_CODE_RUNNING_ENV.match(n) for n in _leading_assignments(cleaned)):
+        return True
+    if argv[0] == "gh":
+        return False
+    i = 1
+    while i < len(argv) and argv[i].startswith("-"):
+        opt = argv[i]
+        if opt.startswith(("-c", "--config-env", "--exec-path")):
+            return True
+        i += 2 if opt in _GIT_VALUE_GLOBALS else 1
+    sub = argv[i] if i < len(argv) else ""
+    for tok in argv[i + 1:]:
+        if tok.startswith(("--upload-pack", "--receive-pack", "--exec")):
+            return True
+        # `<helper>::<addr>` makes git run `git-remote-<helper>` from PATH.
+        if "::" in tok or (sub == "ls-remote" and tok.startswith("-u")):
+            return True
+    return False
+
+
+def nested_command_verdict(stmt, unsandboxed):
+    """Vet git/gh commands hidden inside a statement — in `$(...)`, backticks,
+    a subshell/brace group, a pipe, or an exec wrapper (`bash -c`, `xargs`,
+    `timeout`). Returns ("ask", reason) if one would not be allowed, else None."""
+    normalized = normalize_cmd(stmt)
+    words = normalized.split(None, 1)
+    head = os.path.basename(words[0]) if words else ""
+    if head in _EXEC_WRAPPERS or "$(" in stmt or "`" in stmt:
+        text = normalized
+    else:
+        text = strip_quoted_strings(normalized)
+        if not re.search(r"[(){}|]", text):
+            return None
+    for m in _NESTED_CMD_RE.finditer(text):
+        if m.start() == 0:
+            continue  # the statement's own command — vetted by the caller
+        end = _NESTED_END_RE.search(text, m.start())
+        inner = text[m.start():end.start() if end else len(text)]
+        if evaluate_single_cmd(inner, unsandboxed)[0] != "allow":
+            return ("ask", f"Nested command: {inner.strip()[:120]}")
+    return None
 
 
 def evaluate_single_cmd(cmd_str, unsandboxed):
@@ -569,7 +806,13 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     ("allow", None), ("ask", reason), or ("deny", reason)."""
     stripped = cmd_str.strip()
     # Strip safe redirections
-    cleaned = SAFE_REDIRECTS.sub('', stripped)
+    cleaned = SAFE_REDIRECTS.sub(' ', stripped).strip()
+
+    # The sandbox reaches GitHub, so a git/gh write must not hide behind a
+    # substitution, pipe or wrapper in either mode.
+    nested = nested_command_verdict(cleaned, unsandboxed)
+    if nested:
+        return nested
 
     # Try to strip safe pipes
     producer = strip_safe_pipes(cleaned)
@@ -591,21 +834,25 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     # Check always-dangerous patterns (git push --force, docker)
     for pattern in ASK_ALWAYS_PATTERNS:
         if re.match(pattern, normalized):
-            if unsandboxed:
-                return ("ask", f"Dangerous operation: {stripped[:120]}")
-            return ("deny", NEEDS_UNSANDBOXED)
+            return ("ask", f"Dangerous operation: {stripped[:120]}")
+
+    runs_code = git_runs_code(cleaned, normalized)
+    # The git regexes can't parse a quoted `-c k='a b'` value, so a networked
+    # git with such overrides asks outright, sandboxed or not.
+    if runs_code and re.search(r"\b(?:push|fetch|pull|ls-remote|remote|clone|submodule)\b",
+                               normalized):
+        return ("ask", f"git with code-running overrides: {stripped[:120]}")
+    safe = any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS) and not runs_code
 
     # If bypassing sandbox, only allow known-safe commands
     if unsandboxed:
-        for pattern in SAFE_UNSANDBOXED_PATTERNS:
-            if re.match(pattern, normalized):
-                return ("allow", None)
+        if safe:
+            return ("allow", None)
         return ("ask", f"Sandbox bypass: {stripped[:120]}")
 
-    # Network/keyring commands inside sandbox: deny with clear bypass instruction
-    for pattern in NEEDS_UNSANDBOXED_PATTERNS:
-        if re.match(pattern, normalized):
-            return ("deny", NEEDS_UNSANDBOXED)
+    # Network git/gh inside the sandbox: same gate as unsandboxed (gh writes ask)
+    if any(re.match(p, normalized) for p in NETWORK_PATTERNS) and not safe:
+        return ("ask", f"Network operation: {stripped[:120]}")
 
     # Everything else is contained by the sandbox
     return ("allow", None)
@@ -616,27 +863,33 @@ if tool != "Bash":
     allow()
 
 # Strip safe redirections and quoted strings for metacharacter check
-cmd_for_meta_check = SAFE_REDIRECTS.sub('', cmd)
+cmd_for_meta_check = SAFE_REDIRECTS.sub(' ', cmd)
 cmd_for_meta_check = strip_safe_tmp_redirects(cmd_for_meta_check)
+# Drop quoted-delimiter heredoc bodies (inert stdin data) so `<<` and the body
+# newlines don't read as a compound command; the producer + pipe target remain.
+cmd_for_meta_check = strip_quoted_heredocs(cmd_for_meta_check)
 cmd_unquoted = strip_quoted_strings(cmd_for_meta_check)
 
 # Check for truly unsafe metacharacters (not && or |, those are handled below).
 # Only block when unsandboxed — inside the sandbox, containment handles the risk,
 # and patterns like git commit -m "$(cat <<'EOF' ...)" are safe and common.
 # Use unquoted version so metacharacters inside quotes don't trigger false positives.
-if unsandboxed and UNSAFE_META.search(cmd_unquoted):
+if unsandboxed and (UNSAFE_META.search(cmd_unquoted)
+                    or has_substitution(cmd_for_meta_check)):
     ask(f"Compound command: {cmd[:120]}")
 
-# Check if this is a && chain (use redirect-stripped version so 2>&1 doesn't look like single &)
-and_parts = split_on_and(cmd_for_meta_check)
-if and_parts is None:
+# Decompose into statements on &&, ||, ; and newlines (redirect-stripped so 2>&1
+# isn't read as a single &). None => a single `&` background op or unbalanced quotes.
+stmt_parts = split_statements(cmd_for_meta_check)
+if stmt_parts is None:
     if unsandboxed:
         ask(f"Compound command: {cmd[:120]}")
-    # Inside sandbox with unparseable command — sandbox contains it, allow
-    and_parts = [cmd_for_meta_check]
+    # Sandboxed but unparseable: split on every separator, quotes ignored, so
+    # `echo x & git push --force` can't pass as one `echo` statement.
+    stmt_parts = [p for p in re.split(r"[;&|\n]+", cmd_for_meta_check) if p.strip()]
 
-# Evaluate each part of the && chain (or just the single command)
-for part in and_parts:
+# Evaluate each statement (each part of the chain, or the single command)
+for part in stmt_parts:
     decision, reason = evaluate_single_cmd(part, unsandboxed)
     if decision == "deny":
         deny(reason)

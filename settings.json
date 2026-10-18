@@ -1,7 +1,13 @@
 {
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
   "permissions": {
     "allow": [
       "Agent(*)",
+      "mcp__codex__codex",
+      "mcp__codex__codex-reply",
       "Bash(gh:*)",
       "Bash(echo:*)",
       "Bash(tail:*)",
@@ -21,24 +27,26 @@
       "Bash(git add:*)",
       "Bash(git rm:*)",
       "Bash(git merge-base:*)",
+      "Bash(git ls-remote:*)",
       "Bash(git ls-files:*)",
       "Bash(git show:*)",
       "Bash(git rev-parse:*)",
       "Bash(git branch:*)",
       "Bash(git config --get:*)",
-      "Bash(bash ~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
-      "Bash(~/.claude/skills/fetch-coderabbit-threads/scripts/fetch-coderabbit-threads.sh:*)",
-      "Bash(bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
-      "Bash(~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh:*)",
-      "Bash(bash ~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
-      "Bash(~/.claude/skills/fetch-failed-pr-checks/scripts/fetch-failed-pr-checks.sh:*)",
-      "Bash(bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
-      "Bash(~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh:*)",
-      "Bash(bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
-      "Bash(~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh:*)",
-      "Bash(cat <<*reply-invalid-coderabbit.sh*)",
-      "Bash(*| bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh*)",
-      "Bash(*| bash ~/.claude/skills/reply-to-pr-thread/scripts/reply-to-pr-thread.sh*)",
+      "Bash(la-fetch-coderabbit-threads:*)",
+      "Bash(la-fetch-failed-pr-checks:*)",
+      "Bash(la-reply-to-pr-thread:*)",
+      "Bash(la-reply-invalid-coderabbit:*)",
+      "Bash(la-wait-for-reviews:*)",
+      "Bash(la-check-conventions:*)",
+      "Bash(la-count-comments:*)",
+      "Bash(la-arch-check:*)",
+      "Bash(la-doctor:*)",
+      "Bash(la-config:*)",
+      "Bash(cat <<*la-reply-invalid-coderabbit*)",
+      "Bash(cat <<*la-reply-to-pr-thread*)",
+      "Bash(*| la-reply-invalid-coderabbit*)",
+      "Bash(*| la-reply-to-pr-thread*)",
       "Bash(env -u SSH_AUTH_SOCK uv run python:*)",
       "Bash(env -u SSH_AUTH_SOCK git push:*)",
       "Bash(env -u SSH_AUTH_SOCK git pull:*)",
@@ -59,9 +67,16 @@
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)"
-    ]
+    ],
+    "defaultMode": "acceptEdits",
+    "disableAutoMode": "disable"
   },
-  "model": "opus[1m]",
+  "availableModels": [
+    "opus-4-8",
+    "sonnet",
+    "haiku",
+    "fable"
+  ],
   "hooks": {
     "PermissionRequest": [
       {
@@ -111,8 +126,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh",
+            "command": "'/home/james/.claude/hooks/sonar-secrets/build-scripts/pretool-secrets.sh'",
             "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/block_claude_attribution.py",
+            "timeout": 10
           }
         ]
       }
@@ -129,20 +154,20 @@
     ],
     "UserPromptSubmit": [
       {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/james/.claude/hooks/sonar-secrets/build-scripts/prompt-secrets.sh",
-            "timeout": 60
-          }
-        ]
-      },
-      {
         "hooks": [
           {
             "type": "command",
             "command": "[ -n \"$SUPERSET_HOME_DIR\" ] && [ -x \"$SUPERSET_HOME_DIR/hooks/notify.sh\" ] && \"$SUPERSET_HOME_DIR/hooks/notify.sh\" || true"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/home/james/.claude/hooks/sonar-secrets/build-scripts/prompt-secrets.sh'",
+            "timeout": 60
           }
         ]
       }
@@ -209,14 +234,17 @@
       ]
     },
     "excludedCommands": [
-      "bash ~/.claude/skills/process-reviews/scripts/wait-for-reviews.sh",
-      "bash ~/.claude/skills/process-reviews/scripts/reply-invalid-coderabbit.sh",
       "gh pr list",
+      "gh pr checks",
       "env -u SSH_AUTH_SOCK uv run python",
       "env -u SSH_AUTH_SOCK git push",
       "env -u SSH_AUTH_SOCK git pull",
       "env -u SSH_AUTH_SOCK git fetch",
       "env -u SSH_AUTH_SOCK git merge",
+      "git fetch",
+      "git push",
+      "git pull",
+      "git merge",
       "env -u SSH_AUTH_SOCK uv run bird-interact-cloud fetch",
       "env -u SSH_AUTH_SOCK uv run bird-interact-cloud list",
       "uv run bird-interact-cloud fetch",
@@ -228,6 +256,11 @@
   },
   "alwaysThinkingEnabled": true,
   "effortLevel": "xhigh",
-  "autoUpdatesChannel": "stable",
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "autoUpdatesChannel": "latest",
   "theme": "dark"
 }

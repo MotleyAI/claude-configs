@@ -9,7 +9,7 @@ Auto-approved. Sandbox contains filesystem access.
 ## Bash inside sandbox
 
 Everything auto-approves — the sandbox contains it — except what reaches GitHub, since the sandbox has network and keyring access:
-- Network `git`/`gh` (`fetch`, `ls-remote`, `push`, `pull`, `merge`, `gh *`) get the same verdict as unsandboxed: reads and plain push allow, writes ask.
+- Network `git`/`gh` (`fetch`, `ls-remote`, `push`, `pull`, `merge`, `gh *`) get the same verdict as unsandboxed: reads, PR/issue comments and plain push allow, other writes ask.
 - Force/delete pushes and `docker` → **ask**.
 - A git/gh command nested in `$()`, backticks, `( )`, `{ }`, a pipe or an exec wrapper (`bash -c`, `xargs`, `timeout`, …) is vetted the same way.
 - git with code-running overrides (`-c`, `--upload-pack`, `ext::` remotes, `GIT_SSH_COMMAND=`, …) plus a network subcommand → **ask**.
@@ -27,6 +27,7 @@ Statements are split on `&&`, `||`, `;` and newlines; `#` comments are dropped a
 | `git push`, `docker` | **ask** | Dangerous — mutate remote/state |
 | `git fetch`, `git ls-remote` | **allow** | Read-only, just needs keyring |
 | `gh` reads (`pr/issue/run/repo list/view`, `pr checks`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
+| `gh pr comment`, `gh issue comment` (not `--delete-last`) | **allow** | One easily-deleted comment; attribution still blocked |
 | All other `gh` commands | **ask** | Unknown = assume write |
 | `wc` (standalone) | **allow** | Counts only, no content exposure |
 | Everything else | **ask** | No reason to bypass sandbox |

@@ -1863,3 +1863,36 @@ class TestGitRunsCode:
     ])
     def test_not_detected(self, cmd):
         assert not git_runs_code(cmd, normalize_cmd(cmd))
+
+
+class TestGhComments:
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    @pytest.mark.parametrize("cmd", [
+        "gh pr comment 10 --body '@coderabbitai review'",
+        "gh issue comment 5 --body-file /tmp/body.md",
+        "gh -R MotleyAI/claude-configs pr comment 10 --body x",
+        "gh pr comment 10 --edit-last --body y",
+        "~/.claude/scripts/retry.sh -n 6 -d 5 -- gh pr comment 10 --body x",
+    ])
+    def test_comment_allowed(self, cmd, unsandboxed):
+        assert get_decision("Bash", {
+            "command": cmd, "dangerouslyDisableSandbox": unsandboxed,
+        }) == "allow"
+
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    @pytest.mark.parametrize("cmd", [
+        "gh pr comment 10 --delete-last",
+        "gh pr create --title t --body b",
+        "gh pr edit 10 --title t",
+        "gh pr ready 10",
+        "gh pr review 10 --comment --body x",
+        "gh pr merge 10",
+        "gh pr close 10",
+        "gh issue close 5",
+        "gh api -X PATCH repos/o/r/pulls/10 -f title=t",
+        "gh pr comment 10 --body x && gh pr merge 10",
+    ])
+    def test_other_writes_still_ask(self, cmd, unsandboxed):
+        assert get_decision("Bash", {
+            "command": cmd, "dangerouslyDisableSandbox": unsandboxed,
+        }) == "ask"

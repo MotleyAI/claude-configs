@@ -95,9 +95,16 @@ GH_READ_PATTERNS = [
     r"^gh\s+auth\s+status\b",
 ]
 
+# PR/issue comments: one easily-deleted comment each, so auto-allowed (attribution
+# is still blocked by block_claude_attribution.py). Deleting a comment asks.
+GH_COMMENT_PATTERNS = [
+    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue)\s+comment\b(?!.*\s--delete-last\b)",
+]
+
 # Commands that legitimately need unsandboxed access but are safe
 SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
+    *GH_COMMENT_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
     # git ls-remote: read-only network — lists remote refs, mutates nothing

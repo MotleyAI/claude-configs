@@ -7,8 +7,8 @@
 #    is prompted UNLESS it's a known-safe command (gh reads, git fetch/pull).
 #    Network git/gh inside the sandbox gets the same allow/ask verdict.
 #
-# 2. Dangerous commands: force/delete pushes, gh writes, docker — always
-#    prompt regardless of sandbox state.
+# 2. Dangerous commands: force/delete pushes, gh writes, docker that can reach
+#    the host — always prompt regardless of sandbox state.
 import sys
 import json
 import re
@@ -79,20 +79,48 @@ ASK_ALWAYS_PATTERNS = [
     # git push <remote> [<ref> ...] +branch  (force-push refspec — same
     # multi-arg shape as the deletion form)
     r"^git\b(?:\s+(?:-\w+|--\w[\w-]*)(?:\s+\S+)?)*\s+push\b(?:\s+\S+)*\s+\+\S",
-    # docker — always ask
+    # docker — asks unless docker_allowed (reads, throwaway-container lifecycle)
     r"^docker\b",
 ]
 
-# Read-only gh patterns — safe even unsandboxed
+# docker reads, and container lifecycle without flags that reach the host.
+DOCKER_READ_RE = re.compile(
+    r"^docker\s+(?:ps|images|info|inspect|port|logs|version|top|diff"
+    r"|(?:container|image)\s+(?:ls|list|inspect|logs|port|top))\b")
+DOCKER_LIFECYCLE_RE = re.compile(
+    r"^docker\s+(?:run|create|exec|start|stop|restart|kill|rm|cp|pull|wait)\b")
+DOCKER_RISKY_RE = re.compile(r"""(?x)
+    --privileged\b
+  | --(?:net|network)(?:=|\s+)['"]?(?:host|container:)
+  | --(?:pid|ipc|uts|userns|cgroupns)(?:=|\s+)['"]?host\b
+  | --(?:cap-add|device|device-cgroup-rule|security-opt|volumes-from|mount|runtime)\b
+  | (?:^|\s)(?:-[a-zA-Z]*v|--volume)(?:=|\s*)['"]?[/.~$]
+  | docker\.sock
+""")
+
+_GH_FLAGS = r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+"
+
+# Read-only gh patterns — safe even unsandboxed (`gh api` reads: gh_api_allowed)
 GH_READ_PATTERNS = [
-    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+(pr|issue|run|repo)\s+(list|view)\b",
+    _GH_FLAGS + r"(pr|issue|run|repo|release|workflow)\s+(list|view)\b",
     # gh pr checks: the PR's status-check rollup — read-only.
-    r"^gh\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+pr\s+checks\b",
-    # gh api: GET by default, safe unless --method/-X specifies non-GET or -f/--field present (implies POST)
-    # Catches space-separated (--method POST, -X POST), equals-sign (--method=POST), and no-space (-XPOST) forms.
-    # Method match is case-insensitive — `gh api -X post` / `--method=patch` reach GitHub as writes too.
-    r"^gh\s+api\b(?!.*(\s+(-X|--method)\s+|-X|--method=)(?i:POST|PUT|PATCH|DELETE))(?!.*(\s+(-f|--field|-F|--raw-field|--input)\b|-[fF]\S|--field=|--raw-field=|--input=))",
+    _GH_FLAGS + r"pr\s+checks\b",
+    _GH_FLAGS + r"(pr\s+diff|run\s+watch)\b",
+    _GH_FLAGS + r"(label|secret)\s+list\b",  # secret list shows names only
+    _GH_FLAGS + r"search\s+(code|prs|issues|repos|commits)\b",
+    r"^gh\s+(--version|version)\s*$",
     r"^gh\s+auth\s+status\b",
+]
+
+# CI control: reversible. Dispatch only for test workflows, never publish ones.
+GH_CI_PATTERNS = [
+    _GH_FLAGS + r"run\s+(rerun|cancel)\b",
+    _GH_FLAGS + r"workflow\s+run\s+(integration-[\w-]+|[\w-]*e2e[\w-]*|latest-deps|ci)\.ya?ml\b",
+]
+
+# Network gh that only writes local files: allowed sandboxed, asks unsandboxed.
+GH_SANDBOXED_PATTERNS = [
+    _GH_FLAGS + r"run\s+download\b",
 ]
 
 # PR/issue comments: one easily-deleted comment each, so auto-allowed (attribution
@@ -105,6 +133,7 @@ GH_COMMENT_PATTERNS = [
 SAFE_UNSANDBOXED_PATTERNS = [
     *GH_READ_PATTERNS,
     *GH_COMMENT_PATTERNS,
+    *GH_CI_PATTERNS,
     # git fetch needs keyring for auth but doesn't mutate local or remote
     r"^git\b(\s+(-\w+|--\w[\w-]*)(\s+\S+)?)*\s+fetch\b",
     # git ls-remote: read-only network — lists remote refs, mutates nothing
@@ -778,6 +807,87 @@ def git_runs_code(cleaned, normalized):
     return False
 
 
+def docker_allowed(normalized):
+    """docker reads, or container lifecycle without host-reaching flags."""
+    if DOCKER_READ_RE.match(normalized):
+        return True
+    return bool(DOCKER_LIFECYCLE_RE.match(normalized)) and not DOCKER_RISKY_RE.search(normalized)
+
+
+def ask_always_hit(normalized):
+    return (any(re.match(p, normalized) for p in ASK_ALWAYS_PATTERNS)
+            and not docker_allowed(normalized))
+
+
+_GH_API_FIELD_FLAGS = {"-f", "-F", "--field", "--raw-field"}
+_GH_API_VALUE_FLAGS = {"-H", "--header", "-q", "--jq", "-t", "--template",
+                       "-p", "--preview", "--hostname", "--cache"}
+_PR_TEXT_PATH = re.compile(r"/?repos/[\w.-]+/[\w.-]+/(?:pulls|issues)/\d+")
+
+
+def gh_api_request(normalized):
+    """(method, path, fields, extra_positionals) of a `gh api` call, or None
+    if it isn't one, can't be parsed, or sends `--input`."""
+    try:
+        argv = shlex.split(normalized)
+    except ValueError:
+        return None
+    if argv[:2] != ["gh", "api"]:
+        return None
+    method, path, fields, extra = None, None, [], 0
+    i = 2
+    while i < len(argv):
+        a = argv[i]
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        if a in ("-X", "--method") or a in _GH_API_FIELD_FLAGS or a in _GH_API_VALUE_FLAGS:
+            if nxt is None:
+                return None
+            if a in ("-X", "--method"):
+                method = nxt
+            elif a in _GH_API_FIELD_FLAGS:
+                fields.append(nxt)
+            i += 2
+            continue
+        if a == "--input" or a.startswith("--input="):
+            return None
+        if a.startswith("--method="):
+            method = a.split("=", 1)[1]
+        elif a.startswith(("--field=", "--raw-field=")):
+            fields.append(a.split("=", 1)[1])
+        elif a.startswith("-X"):
+            method = a[2:]
+        elif a.startswith(("-f", "-F")):
+            fields.append(a[2:])
+        elif not a.startswith("-"):
+            if path is None:
+                path = a
+            else:
+                extra += 1
+        i += 1
+    method = (method or ("POST" if fields else "GET")).upper()
+    return method, path, fields, extra
+
+
+def gh_api_allowed(normalized):
+    """`gh api` reads (GET/HEAD, graphql queries) and PR/issue title/body PATCHes."""
+    req = gh_api_request(normalized)
+    if req is None:
+        return False
+    method, path, fields, extra = req
+    keys = [f.split("=", 1)[0] for f in fields]
+    values = [f.split("=", 1)[1] if "=" in f else "" for f in fields]
+    if path == "graphql" and method == "POST":
+        query = dict(zip(keys, values)).get("query", "")
+        return (query.lstrip().startswith(("query", "{"))
+                and not any(re.search(r"\bmutation\b", v) for v in values)
+                and not any(v.startswith("@") for v in values))
+    if method in ("GET", "HEAD"):
+        return not any(v.startswith("@") for v in values)
+    return (method == "PATCH" and bool(fields) and extra == 0
+            and set(keys) <= {"title", "body"}
+            and bool(path and _PR_TEXT_PATH.fullmatch(path)))
+
+
 def nested_command_verdict(stmt, unsandboxed):
     """Vet git/gh commands hidden inside a statement — in `$(...)`, backticks,
     a subshell/brace group, a pipe, or an exec wrapper (`bash -c`, `xargs`,
@@ -819,6 +929,9 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     if producer is None:
         if unsandboxed:
             return ("ask", f"Unsafe pipe: {stripped[:120]}")
+        # A pipe must not hide an always-ask command (`docker run --privileged … | cat`).
+        if any(ask_always_hit(normalize_cmd(p)) for p in split_on_pipe(cleaned) or [cleaned]):
+            return ("ask", f"Dangerous operation: {stripped[:120]}")
         # Inside sandbox — containment covers the risk, allow.
         return ("allow", None)
     cleaned = producer
@@ -831,10 +944,9 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
         if re.match(pattern, normalized):
             return ("deny", advice)
 
-    # Check always-dangerous patterns (git push --force, docker)
-    for pattern in ASK_ALWAYS_PATTERNS:
-        if re.match(pattern, normalized):
-            return ("ask", f"Dangerous operation: {stripped[:120]}")
+    # Check always-dangerous patterns (git push --force, host-reaching docker)
+    if ask_always_hit(normalized):
+        return ("ask", f"Dangerous operation: {stripped[:120]}")
 
     runs_code = git_runs_code(cleaned, normalized)
     # The git regexes can't parse a quoted `-c k='a b'` value, so a networked
@@ -842,7 +954,8 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
     if runs_code and re.search(r"\b(?:push|fetch|pull|ls-remote|remote|clone|submodule)\b",
                                normalized):
         return ("ask", f"git with code-running overrides: {stripped[:120]}")
-    safe = any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS) and not runs_code
+    safe = (any(re.match(p, normalized) for p in SAFE_UNSANDBOXED_PATTERNS)
+            or gh_api_allowed(normalized)) and not runs_code
 
     # If bypassing sandbox, only allow known-safe commands
     if unsandboxed:
@@ -851,7 +964,9 @@ def evaluate_single_cmd(cmd_str, unsandboxed):
         return ("ask", f"Sandbox bypass: {stripped[:120]}")
 
     # Network git/gh inside the sandbox: same gate as unsandboxed (gh writes ask)
-    if any(re.match(p, normalized) for p in NETWORK_PATTERNS) and not safe:
+    if (any(re.match(p, normalized) for p in NETWORK_PATTERNS) and not safe
+            and not (any(re.match(p, normalized) for p in GH_SANDBOXED_PATTERNS)
+                     and not runs_code)):
         return ("ask", f"Network operation: {stripped[:120]}")
 
     # Everything else is contained by the sandbox

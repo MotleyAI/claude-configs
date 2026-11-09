@@ -36,6 +36,8 @@ evaluate_single_cmd = _module_globals["evaluate_single_cmd"]
 strip_safe_tmp_redirects = _module_globals["strip_safe_tmp_redirects"]
 strip_quoted_heredocs = _module_globals["strip_quoted_heredocs"]
 git_runs_code = _module_globals["git_runs_code"]
+gh_api_allowed = _module_globals["gh_api_allowed"]
+docker_allowed = _module_globals["docker_allowed"]
 
 
 def run_hook(tool_name, tool_input):
@@ -768,7 +770,7 @@ class TestAskAlwaysPatterns:
 
 class TestGhReadPatterns:
     def _matches_read(self, cmd):
-        return any(re.match(p, cmd) for p in GH_READ_PATTERNS)
+        return any(re.match(p, cmd) for p in GH_READ_PATTERNS) or gh_api_allowed(cmd)
 
     def test_pr_view(self):
         assert self._matches_read("gh pr view 123")
@@ -876,7 +878,7 @@ class TestHookIntegration:
         assert get_decision("Bash", {"command": "git push"}) == "allow"
 
     def test_docker_asks_sandboxed(self):
-        assert get_decision("Bash", {"command": "docker run hello"}) == "ask"
+        assert get_decision("Bash", {"command": "docker run --privileged hello"}) == "ask"
 
     # gh inside the sandbox: reads allowed, writes ask (same as unsandboxed)
     def test_gh_pr_view_sandboxed_allows(self):
@@ -1914,10 +1916,144 @@ class TestGhComments:
         "gh pr merge 10",
         "gh pr close 10",
         "gh issue close 5",
-        "gh api -X PATCH repos/o/r/pulls/10 -f title=t",
+        "gh api -X PATCH repos/o/r/pulls/10 -f state=closed",
         "gh pr comment 10 --body x && gh pr merge 10",
     ])
     def test_other_writes_still_ask(self, cmd, unsandboxed):
         assert get_decision("Bash", {
             "command": cmd, "dangerouslyDisableSandbox": unsandboxed,
         }) == "ask"
+
+
+def _decide(cmd, unsandboxed):
+    return get_decision("Bash", {"command": cmd, "dangerouslyDisableSandbox": unsandboxed})
+
+
+class TestGhApi:
+    @pytest.mark.parametrize("cmd", [
+        "gh api repos/o/r/contents/EXP-0004-first-query-works.md -H 'Accept: application/vnd.github.raw'",
+        "gh api repos/o/r/rules/branches/egor/dev-1-fresh-environment",
+        "gh api repos/o/r/issues/1/comments --jq '.[] | select(.id | test(\"[0-9a-f]\"))'",
+        "gh api -X GET search/issues -f q=repo:o/r",
+        "gh api graphql -f query='query($id:ID!){node(id:$id){id}}' -F id=X",
+        "gh api graphql -f query='{viewer{login}}'",
+        "gh api -X PATCH repos/o/r/pulls/10 -F body=@/tmp/b.md --jq .html_url",
+        "gh api -X PATCH repos/o/r/pulls/10 -f title='a b' -F body=@/tmp/b.md",
+        "gh api --method=PATCH repos/o/r/issues/10 -f body=x",
+        "~/.claude/scripts/retry.sh -- gh api -X PATCH repos/o/r/pulls/10 -F body=@/tmp/b.md",
+    ])
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    def test_allowed(self, cmd, unsandboxed):
+        assert _decide(cmd, unsandboxed) == "allow"
+
+    @pytest.mark.parametrize("cmd", [
+        "gh api repos/o/r/issues -fbody=x",
+        "gh api -XDELETE repos/o/r/git/refs/heads/x",
+        "gh api repos/o/r/pulls/10 --input f.json -X PATCH",
+        "gh api -X PATCH repos/o/r/pulls/10 -f state=closed",
+        "gh api -X PATCH repos/o/r/pulls/10 -f base=main",
+        "gh api -X PATCH repos/o/r/pulls/10 -f title=t -f state=closed",
+        "gh api -X PATCH repos/o/r/pulls/10",
+        "gh api -X PATCH repos/o/r/git/refs/heads/x -f sha=abc",
+        "gh api -X GET search/issues -F q=@/etc/passwd",
+        "gh api graphql -f query='mutation{addStar(input:{}){clientMutationId}}'",
+        "gh api graphql -f query=@q.graphql",
+        "GH_TOKEN=x gh api -X PATCH repos/o/r/pulls/10 -f body=x",
+    ])
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    def test_asks(self, cmd, unsandboxed):
+        assert _decide(cmd, unsandboxed) == "ask"
+
+
+class TestGhReadsAndCi:
+    @pytest.mark.parametrize("cmd", [
+        "gh release view v1.5.0 --repo o/r --json author",
+        "gh release list --repo o/r",
+        "gh workflow view ci.yml",
+        "gh pr diff 12 --name-only",
+        "gh run watch 123 --exit-status",
+        "gh label list -R o/r",
+        "gh secret list",
+        "gh search code foo --repo o/r",
+        "gh --version",
+        "gh run rerun 123 --failed",
+        "gh run cancel 123",
+        "gh workflow run integration-trino.yml --ref x",
+        "gh workflow run pg-facade-e2e.yml",
+        "gh -R o/r workflow run ci.yml",
+    ])
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    def test_allowed(self, cmd, unsandboxed):
+        assert _decide(cmd, unsandboxed) == "allow"
+
+    @pytest.mark.parametrize("cmd", [
+        "gh workflow run publish.yml",
+        "gh workflow run publish-test.yml",
+        "gh workflow run notify-docs.yml",
+        "gh release create v1.0.0",
+        "gh release delete v1.0.0",
+        "gh release upload v1.0.0 f",
+        "gh secret set X",
+        "gh label create x",
+        "gh workflow enable ci.yml",
+    ])
+    @pytest.mark.parametrize("unsandboxed", [False, True])
+    def test_asks(self, cmd, unsandboxed):
+        assert _decide(cmd, unsandboxed) == "ask"
+
+    def test_run_download_only_sandboxed(self):
+        assert _decide("gh run download 123 -n logs", False) == "allow"
+        assert _decide("gh run download 123 -n logs", True) == "ask"
+
+
+class TestDocker:
+    @pytest.mark.parametrize("cmd", [
+        "docker ps --format '{{.Names}}'",
+        "docker images",
+        "docker info --format '{{.ServerVersion}}'",
+        "docker inspect probe",
+        "docker port probe",
+        "docker logs probe",
+        "docker container ls -a",
+        "docker run -d --name ch-probe -p 8123:8123 clickhouse/clickhouse-server",
+        "docker run -d -v pgdata:/var/lib/postgresql/data postgres",
+        "docker exec probe psql -v ON_ERROR_STOP=1 -c 'select 1'",
+        "docker rm -f ch-probe",
+        "docker stop probe",
+        "docker start probe",
+        "docker cp probe:/tmp/x.log /tmp/x.log",
+        "docker pull trinodb/trino",
+        "docker ps | head -3",
+    ])
+    def test_allowed(self, cmd):
+        assert _decide(cmd, False) == "allow"
+
+    @pytest.mark.parametrize("cmd", [
+        "docker run -v /:/host alpine",
+        "docker run -v=/etc:/e alpine",
+        "docker run -itv /:/h alpine",
+        "docker run -v ~/.ssh:/s alpine",
+        "docker run -v \"$PWD/x:/x:ro\" alpine",
+        "docker run --mount type=bind,src=/,dst=/h alpine",
+        "docker run --net=host alpine",
+        "docker run --network host alpine",
+        "docker run --pid=host alpine",
+        "docker run --cap-add SYS_ADMIN alpine",
+        "docker run --device /dev/sda alpine",
+        "docker run --security-opt seccomp=unconfined alpine",
+        "docker run --volumes-from x alpine",
+        "docker exec --privileged probe sh",
+        "docker run -v /var/run/docker.sock:/var/run/docker.sock alpine",
+        "docker compose up",
+        "docker build .",
+        "docker push x",
+        "docker login",
+        "docker system prune -f",
+        "docker volume rm x",
+        "docker commit probe x",
+        "docker -H tcp://h ps",
+        "docker run --privileged -v /:/h alpine | cat",
+        "echo x | docker run --privileged alpine",
+    ])
+    def test_asks(self, cmd):
+        assert _decide(cmd, False) == "ask"

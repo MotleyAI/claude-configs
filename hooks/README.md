@@ -10,7 +10,8 @@ Auto-approved. Sandbox contains filesystem access.
 
 Everything auto-approves — the sandbox contains it — except what reaches GitHub, since the sandbox has network and keyring access:
 - Network `git`/`gh` (`fetch`, `ls-remote`, `push`, `pull`, `merge`, `gh *`) get the same verdict as unsandboxed: reads, PR/issue comments and plain push allow, other writes ask.
-- Force/delete pushes and `docker` → **ask**.
+- Force/delete pushes and host-reaching `docker` → **ask**. docker reads (`ps`, `images`, `inspect`, `logs`, …) and container lifecycle (`run`, `exec`, `rm`, `stop`, `cp`, `pull`, …) allow unless they use `--privileged`, host bind mounts (`-v /…`, `--mount`), `--network/--pid/--ipc host`, `--cap-add`, `--device`, `--security-opt`, `--volumes-from` or `docker.sock`. A pipe can't hide them.
+- `gh run download` allows (it only writes local files); unsandboxed it asks.
 - A git/gh command nested in `$()`, backticks, `( )`, `{ }`, a pipe or an exec wrapper (`bash -c`, `xargs`, `timeout`, …) is vetted the same way.
 - git with code-running overrides (`-c`, `--upload-pack`, `ext::` remotes, `GIT_SSH_COMMAND=`, …) plus a network subcommand → **ask**.
 
@@ -26,9 +27,13 @@ Statements are split on `&&`, `||`, `;` and newlines; `#` comments are dropped a
 | `cmd1 && cmd2`, `;`, `\|\|` | **evaluate each** | Each part checked independently |
 | git with code-running overrides (`-c`, `--config-env`, `--upload-pack`, `--receive-pack`, `<helper>::` remotes, `GIT_*`/`PATH`/`HOME` env prefixes) | **ask** | Runs an arbitrary program |
 | `cmd \| safe_filter` | **evaluate cmd** | Safe pipe targets: head, tail, grep, wc, sort |
-| `git push`, `docker` | **ask** | Dangerous — mutate remote/state |
+| `git push` force/delete forms, host-reaching `docker` | **ask** | Dangerous — mutate remote/state or reach the host |
+| docker reads and lifecycle without host-reaching flags | **allow** | Containers only |
 | `git fetch`, `git ls-remote` | **allow** | Read-only, just needs keyring |
-| `gh` reads (`pr/issue/run/repo list/view`, `pr checks`, `api` without POST flags, `auth status`) | **allow** | Read-only, just needs keyring |
+| `gh` reads (`pr/issue/run/repo/release/workflow list/view`, `pr checks`, `pr diff`, `run watch`, `label/secret list`, `search`, `--version`, `auth status`) | **allow** | Read-only, just needs keyring |
+| `gh api` GET/HEAD and graphql queries (shlex-parsed: no real `-f/-F` field, `--input` or write method; graphql without `mutation` or `@file`) | **allow** | Read-only |
+| `gh api -X PATCH repos/O/R/(pulls\|issues)/N` with only `title`/`body` fields | **allow** | PR/issue text; GitHub keeps edit history |
+| `gh run rerun/cancel`, `gh workflow run` of `integration-*`, `*e2e*`, `latest-deps`, `ci` workflows | **allow** | Reversible CI control; publish workflows still ask |
 | `gh pr comment`, `gh issue comment` (not `--delete-last`) | **allow** | One easily-deleted comment; attribution still blocked |
 | All other `gh` commands | **ask** | Unknown = assume write |
 | `wc` (standalone) | **allow** | Counts only, no content exposure |
